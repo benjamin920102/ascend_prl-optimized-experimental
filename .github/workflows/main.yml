@@ -1,0 +1,230 @@
+name: Ascend 910B - Checks, Build and Experimental Pre-release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Kernel build profile (matrix builds all three separately)'
+        type: choice
+        required: true
+        default: mbatch2
+        options:
+          - baseline
+          - mbatch2
+          - atpack
+          - matrix
+          - custom
+      custom_mbatch:
+        description: 'Custom only: MBATCH (1-8)'
+        type: string
+        default: '2'
+      custom_bufs:
+        description: 'Custom only: BUFS (multiple of VEC2X)'
+        type: string
+        default: '2'
+      custom_vec2x:
+        description: 'Custom only: VEC2X'
+        type: string
+        default: '2'
+      custom_backoff:
+        description: 'Custom only: BACKOFF'
+        type: string
+        default: '500'
+      custom_basen:
+        description: 'Custom only: BASEN (0 or a multiple of 32)'
+        type: string
+        default: '128'
+      custom_at_pack:
+        description: 'Custom only: experimental repacked-A path'
+        type: boolean
+        default: false
+      publish_release:
+        description: 'Also publish compiled artifacts as an UNVERIFIED pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ascend-910b-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  host-checks:
+    name: Host-only preflight (no NPU)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python geometry and CI profile tests
+        run: |
+          set -euo pipefail
+          python3 tests/test_repack_layout.py
+          python3 -m unittest discover -s tests -p 'test_ci_*.py' -v
+      - name: Makefile passes optimization macros to CMake (dry run)
+        run: |
+          set -euo pipefail
+          make -n kernel RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 AT_PACK=1 > "$RUNNER_TEMP/make-kernel.txt"
+          for token in -DMBATCH=2 -DBUFS=2 -DVEC2X=2 -DBACKOFF=500 -DBASEN=128 -DAT_PACK=1; do
+            grep -F -- "$token" "$RUNNER_TEMP/make-kernel.txt"
+          done
+      - name: Explain validation boundary
+        run: echo 'PASS means source/config checks only; proof verification and sustained TH/s require an actual Ascend 910B.'
+
+  plan-build:
+    name: Resolve selected build profile(s)
+    needs: host-checks
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and construct build matrix
+        id: matrix
+        env:
+          INPUT_PROFILE: ${{ inputs.profile }}
+          INPUT_CUSTOM_MBATCH: ${{ inputs.custom_mbatch }}
+          INPUT_CUSTOM_BUFS: ${{ inputs.custom_bufs }}
+          INPUT_CUSTOM_VEC2X: ${{ inputs.custom_vec2x }}
+          INPUT_CUSTOM_BACKOFF: ${{ inputs.custom_backoff }}
+          INPUT_CUSTOM_BASEN: ${{ inputs.custom_basen }}
+          INPUT_CUSTOM_AT_PACK: ${{ inputs.custom_at_pack }}
+        run: python3 scripts/ci_profiles.py
+
+  build-arm64:
+    name: CANN9 ARM64 - ${{ matrix.id }} (MBATCH=${{ matrix.mbatch }}, AT_PACK=${{ matrix.at_pack }})
+    needs: plan-build
+    if: github.event_name == 'workflow_dispatch'
+    # Repository variable may select a self-hosted ARM64 runner with enough disk.
+    runs-on: ${{ vars.ASCEND_BUILD_RUNNER || 'ubuntu-22.04-arm' }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan-build.outputs.matrix) }}
+    env:
+      CI_MBATCH: ${{ matrix.mbatch }}
+      CI_BUFS: ${{ matrix.bufs }}
+      CI_VEC2X: ${{ matrix.vec2x }}
+      CI_BACKOFF: ${{ matrix.backoff }}
+      CI_BASEN: ${{ matrix.basen }}
+      CI_AT_PACK: ${{ matrix.at_pack }}
+      CANN_TOOLKIT_URL: ${{ vars.CANN_TOOLKIT_URL || 'https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-toolkit_9.0.0_linux-aarch64.run' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Check ARM64 runner and free disk
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          df -h .
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git curl clang pkg-config wget zlib1g-dev libssl-dev python3 ca-certificates
+      - name: Fetch Pearl proof sources at build time
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/pearl-research-labs/pearl.git "$RUNNER_TEMP/pearl"
+          git -C "$RUNNER_TEMP/pearl" rev-parse HEAD | tee pearl-source-revision.txt
+          sudo mkdir -p /root/pearl-rust
+          sudo cp -a "$RUNNER_TEMP/pearl/." /root/pearl-rust/
+          sudo test -d /root/pearl-rust/zk-pow
+          sudo test -d /root/pearl-rust/pearl-blake3
+      - name: Install CANN 9.0.0 toolkit (compiler only; no NPU device)
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/Ascend-cann-toolkit.run" "$CANN_TOOLKIT_URL"
+          test "$(stat -c %s "$RUNNER_TEMP/Ascend-cann-toolkit.run")" -gt 100000000
+          sudo bash "$RUNNER_TEMP/Ascend-cann-toolkit.run" --install --quiet
+          sudo test -f /usr/local/Ascend/cann/set_env.sh
+          rm -f "$RUNNER_TEMP/Ascend-cann-toolkit.run"
+      - name: Install stable Rust toolchain for root-owned proof build
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://sh.rustup.rs --output "$RUNNER_TEMP/rustup.sh"
+          sudo -H sh "$RUNNER_TEMP/rustup.sh" -y --profile minimal
+          sudo -H /root/.cargo/bin/rustup default stable
+      - name: Fetch BLAKE3 C source and record revision
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/BLAKE3-team/BLAKE3.git "$RUNNER_TEMP/blake3"
+          git -C "$RUNNER_TEMP/blake3" rev-parse HEAD | tee blake3-source-revision.txt
+          test -f "$RUNNER_TEMP/blake3/c/blake3.c"
+          echo "CI_BLK=$RUNNER_TEMP/blake3/c" >> "$GITHUB_ENV"
+      - name: Compile kernel, proof library and both miners
+        run: |
+          set -euo pipefail
+          sudo -H env \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CI_BLK="$CI_BLK" \
+            CI_MBATCH="$CI_MBATCH" CI_BUFS="$CI_BUFS" CI_VEC2X="$CI_VEC2X" \
+            CI_BACKOFF="$CI_BACKOFF" CI_BASEN="$CI_BASEN" CI_AT_PACK="$CI_AT_PACK" \
+            bash scripts/ci_build.sh
+      - name: Package separate, labeled experimental binaries
+        env:
+          PROFILE_NAME: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          basename="ascend_prl_910b_${PROFILE_NAME}_${GITHUB_RUN_NUMBER}_${GITHUB_RUN_ATTEMPT}"
+          tar -czf "dist/${basename}.tar.gz" -C build .
+          (cd dist && sha256sum "${basename}.tar.gz" > "${basename}.sha256")
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          basename = f'ascend_prl_910b_{os.environ["PROFILE_NAME"]}_{os.environ["GITHUB_RUN_NUMBER"]}_{os.environ["GITHUB_RUN_ATTEMPT"]}'
+          manifest = {
+              "profile": os.environ["PROFILE_NAME"], "rank": 128,
+              **{key.lower(): int(os.environ[f'CI_{key}']) for key in ("MBATCH", "BUFS", "VEC2X", "BACKOFF", "BASEN", "AT_PACK")},
+              "github_sha": os.environ["GITHUB_SHA"], "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "runtime_npu_verification": "NOT_RUN", "benchmark_ths": None,
+              "notes": "Compilation on ARM64 is not a proof-correctness or throughput test. AT_PACK is experimental.",
+              "external_source_revisions": {
+                  "pearl": Path('pearl-source-revision.txt').read_text().strip(),
+                  "blake3": Path('blake3-source-revision.txt').read_text().strip(),
+              },
+          }
+          Path(f'dist/{basename}.manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+          ls -lh dist/
+      - name: Upload compiled artifacts (all profiles are independent)
+        uses: actions/upload-artifact@v4
+        with:
+          name: 910b-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
+
+  experimental-pre-release:
+    name: Publish optional UNVERIFIED pre-release
+    needs: build-arm64
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Collect independently built profiles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 910b-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-files
+          merge-multiple: true
+      - name: Publish opt-in GitHub pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: experimental-910b-${{ github.run_number }}-${{ github.run_attempt }}
+          name: '910B experimental binaries #${{ github.run_number }}'
+          prerelease: true
+          generate_release_notes: false
+          body: |
+            ARM64 CANN 9.0.0 compile artifacts, built with separate profile-specific options.
+            **NOT validated on Ascend 910B hardware; proof correctness and TH/s are unverified.**
+            Do not treat AT_PACK=1 as production-ready. See each accompanying manifest.
+          files: release-files/*
+          fail_on_unmatched_files: true

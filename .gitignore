@@ -1,0 +1,14 @@
+build/
+kernel/build/
+proof-ffi/target/
+*.so
+*.swp
+*.o
+prl
+challenge_solver
+.DS_Store
+pearl
+releases/
+# Local CI experiment artifacts
+.ci-deps/
+dist/

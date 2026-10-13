@@ -7,6 +7,7 @@ set -euo pipefail
 : "${CI_BACKOFF:?missing CI_BACKOFF}"
 : "${CI_BASEN:?missing CI_BASEN}"
 : "${CI_AT_PACK:?missing CI_AT_PACK}"
+: "${CI_HIT_EPOCH:?missing CI_HIT_EPOCH}"
 : "${CI_BLK:?missing CI_BLK}"
 : "${GITHUB_WORKSPACE:?missing GITHUB_WORKSPACE}"
 if [[ "$(uname -m)" != "aarch64" ]]; then
@@ -36,11 +37,11 @@ if [[ ! -d "${ASC_MODULES:-}" ]]; then
 fi
 cd "$GITHUB_WORKSPACE"
 echo "=== Build configuration (not hardware verified) ==="
-echo "RANK=128 MBATCH=$CI_MBATCH BUFS=$CI_BUFS VEC2X=$CI_VEC2X BACKOFF=$CI_BACKOFF BASEN=$CI_BASEN AT_PACK=$CI_AT_PACK"
+echo "RANK=128 MBATCH=$CI_MBATCH BUFS=$CI_BUFS VEC2X=$CI_VEC2X BACKOFF=$CI_BACKOFF BASEN=$CI_BASEN AT_PACK=$CI_AT_PACK HIT_EPOCH=$CI_HIT_EPOCH"
 cargo --version
 make \
   RANK=128 MBATCH="$CI_MBATCH" BUFS="$CI_BUFS" VEC2X="$CI_VEC2X" \
-  BACKOFF="$CI_BACKOFF" BASEN="$CI_BASEN" AT_PACK="$CI_AT_PACK" \
+  BACKOFF="$CI_BACKOFF" BASEN="$CI_BASEN" AT_PACK="$CI_AT_PACK" HIT_EPOCH="$CI_HIT_EPOCH" \
   BLK="$CI_BLK" all
 for file in build/libpearl_hlc2.so build/libpearl_proof.so build/ascend_prl_kryptex build/ascend_prl_k1; do
   test -s "$file" || { echo "ERROR: $file missing or empty" >&2; exit 1; }

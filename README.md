@@ -1,5 +1,7 @@
 # `ascend_prl` — the world's first Ascend NPU cryptocurrency miner
 
+> **910B profiler v3:** `HIT_EPOCH=1` is now the default: per-Vector-core epoch hit records replace per-strip device memset. `HIT_EPOCH=0` retains the original protocol for matched A/B testing. GitHub Actions includes `mbatch2_legacy` and `mbatch2`; see [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md). The new protocol is **not yet NPU-verified**.
+
 [![No Maintenance Intended](http://unmaintained.tech/badge.svg)](http://unmaintained.tech/)
 
 **English** | [中文](README_zh.md)

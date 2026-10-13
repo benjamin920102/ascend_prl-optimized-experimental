@@ -4,25 +4,30 @@
 
 `.github/workflows/main.yml` has these phases:
 
-1. **PR / main push:** `host-checks` runs a Python layout sanity test, CI profile validation tests, and `make -n` macro expansion. This phase does **not** compile `.asc` or exercise an NPU.
+1. **PR / main push:** `host-checks` runs Python layout/profile tests, compiles and executes pure-host C++ hit epoch decoder tests, tests the production scan pipeline with a mocked NPU API, and checks `make -n` macro propagation. This phase does **not** compile `.asc` or exercise an NPU.
 2. **Actions -> Run workflow (manual):** `plan-build` validates inputs, then `build-arm64` compiles `kernel`, `proof`, and both miners. It uses `ubuntu-22.04-arm` by default, and installs CANN 9.0.0. No NPU device is available on a standard GitHub-hosted runner.
 3. **Optional pre-release:** `publish_release=true` publishes experimental build artifacts only when *all selected compilation jobs succeed*. Default is `false`, leaving artifacts under the Actions run for 14 days.
 
 ## Build profiles
 
-| Name | RANK | MBATCH | BUFS | VEC2X | BACKOFF | BASEN | AT_PACK | Role |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| baseline | 128 | 1 | 4 | 2 | 2000 | 0 | 0 | Reference build |
-| mbatch2 | 128 | 2 | 2 | 2 | 500 | 128 | 0 | Early release and tuned tiling experiment |
-| atpack | 128 | 2 | 2 | 2 | 500 | 128 | 1 | Experimental A-side repack |
-| matrix | 128 | Each of the above, built independently | | | | | | Matrix comparison |
-| custom | 128 | Manual inputs | | | | | | Alternative tiling experiment |
+| Profile | MBATCH | BUFS | BASEN | AT_PACK | HIT_EPOCH | Purpose |
+|---|---:|---:|---:|---:|---:|---|
+| `baseline` | 1 | 4 | 0 | 0 | **0** | Original kernel/hit protocol baseline |
+| `mbatch2_legacy` | 2 | 2 | 128 | 0 | **0** | Matched A/B control retaining per-strip memset |
+| `mbatch2` | 2 | 2 | 128 | 0 | **1** | New per-core hit epoch, no per-strip memset |
+| `atpack` | 2 | 2 | 128 | 1 | **1** | Epoch + experimental A-side repacking |
+| `matrix` | — | — | — | — | — | Independently compile all four profiles |
+| `custom` | Chosen | Chosen | Chosen | Chosen | Chosen | User-specified profile and epoch mode |
 
-Compile and test configurations **separately**. Do not swap in just `libpearl_hlc2.so` from an incompatible build.
+All profiles target `RANK=128`, `VEC2X=2`. `baseline` uses `BACKOFF=2000`; the other presets use `BACKOFF=500`.
 
-Input validation allows `MBATCH=1..8`, `BUFS=1..16`, `VEC2X=1..4` with `BUFS % VEC2X == 0`, `BACKOFF=0..100000`, `BASEN=0` or 32-byte-aligned tile width up to `128*MBATCH`, and `AT_PACK=0/1`. This rejects invalid **configuration shapes**, not hardware unsupported tiling. Hardware support remains unverified.
+**Compare `mbatch2_legacy` and `mbatch2` first.** They differ **only** in `HIT_EPOCH`, isolating the observed `aclrtMemsetAsync` long-tail hypothesis. `baseline` differs in multiple tiling parameters and cannot isolate the change.
 
-`RANK` is fixed at **128** in this workflow because the kernel's `R` constant and the supplied optimization focus on that exact geometry. `NINNER` and `NFOLD` remain governed by the Makefile and the protocol.
+The `HIT_EPOCH=1` result is one 512-byte-padded record per Vector core. It copies more result bytes to the host per super-strip than the old 8-byte result, trading small extra D2H bandwidth for the removal of per-strip device memset and cross-core false sharing. Performance gain is **not guaranteed**. Epochs persist across scan resets; the host checks epoch and strip bounds before accepting a hit.
+
+Input validation allows `MBATCH=1..8`, `BUFS=1..16`, `VEC2X=1..4` with `BUFS % VEC2X == 0`, `BACKOFF=0..100000`, `BASEN=0` or a 32-aligned tile width up to `128*MBATCH`, `AT_PACK=0/1`, and `HIT_EPOCH=0/1`. This does not validate hardware support.
+
+`RANK` is fixed at **128** in this workflow because the device kernel uses that geometry. `NINNER` and `NFOLD` remain governed by the Makefile and the protocol.
 
 ## Artifacts
 
@@ -35,7 +40,7 @@ Build dependencies `pearl` and BLAKE3 are fetched from their upstream repositori
 - Default runner: GitHub-hosted `ubuntu-22.04-arm`. CANN 9.0.0 Toolkit installation requires considerable free space; if the hosted runner has insufficient space, provision a large ARM64 runner and set repository variable `ASCEND_BUILD_RUNNER` to its label. It must be capable of running this workflow's privileged (`sudo`) installation steps.
 - CANN toolkit URL defaults to Huawei's CANN 9.0.0 AArch64 installer; override with repository variable `CANN_TOOLKIT_URL` if your approved mirror is different. Link accessibility and installer behavior must be checked in a real workflow run.
 - The proof crate uses absolute `/root/pearl-rust` dependencies, so the build job explicitly installs Pearl and Rust for root. If that dependency layout changes, update `proof-ffi/Cargo.toml` and the workflow together.
-- This workflow checks **compilation** only. No GitHub-hosted NPU is provisioned; no bitwise reference transcript verification or real TH/s profiling is claimed. It cannot certify `AT_PACK=1`, `MBATCH>1`, synchronization correctness, or kernel throughput.
+- This workflow checks **host-level logic and compilation** only. No GitHub-hosted NPU is provisioned; no bitwise reference transcript verification or real TH/s profiling is claimed. It cannot certify `AT_PACK=1`, `MBATCH>1`, synchronization correctness, or kernel throughput.
 - A genuine end-to-end gate requires a driver-configured Ascend 910B self-hosted runner, deterministic challenge fixtures and verification against the reference `zk_pow` verifier. Do not promote experimental binaries based on a green build alone.
 
 ## Local preflight
@@ -43,7 +48,9 @@ Build dependencies `pearl` and BLAKE3 are fetched from their upstream repositori
 ```bash
 python3 tests/test_repack_layout.py
 python3 -m unittest discover -s tests -p 'test_ci_*.py' -v
+c++ -O2 -std=c++17 -Wall -Wextra -Werror -pedantic -o /tmp/test_hit_epoch tests/test_hit_epoch.cpp && /tmp/test_hit_epoch
+cc -O2 -std=c11 -Wall -Wextra -Werror -o /tmp/test_scan_pipeline tests/test_scan_pipeline.c -lpthread && /tmp/test_scan_pipeline
 python3 scripts/ci_profiles.py  # profile=mbatch2 by default
 INPUT_PROFILE=matrix python3 scripts/ci_profiles.py
-make -n kernel RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 AT_PACK=1
+make -n kernel RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 AT_PACK=1 HIT_EPOCH=1
 ```

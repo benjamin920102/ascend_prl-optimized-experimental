@@ -12,6 +12,7 @@ set(MBATCH "1" CACHE STRING "bands per cube IterateAll")
 set(BASEN "0" CACHE STRING "N tile width (0=full)")
 set(KERNEL_K "4096" CACHE STRING "expected K dimension for fold geometry check")
 set(AT_PACK "0" CACHE STRING "experimental A-side K-major repack (0=off)")
+set(HIT_EPOCH "1" CACHE STRING "epoch-tagged independent per-core hit records (0=legacy)")
 add_library(pearl_hlc2 SHARED pearl_hlc2_cube.asc pearl_hlc2_vec.asc)
 set_target_properties(pearl_hlc2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(pearl_hlc2 PRIVATE tiling_api register platform m dl pthread)
@@ -26,4 +27,5 @@ target_compile_options(pearl_hlc2 PRIVATE
     $<$<COMPILE_LANGUAGE:ASC>:-DBASEN=${BASEN}>
     $<$<COMPILE_LANGUAGE:ASC>:-DKERNEL_K=${KERNEL_K}>
     $<$<COMPILE_LANGUAGE:ASC>:-DAT_PACK=${AT_PACK}>
+    $<$<COMPILE_LANGUAGE:ASC>:-DHIT_EPOCH=${HIT_EPOCH}>
 )

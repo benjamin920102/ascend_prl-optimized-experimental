@@ -1,5 +1,7 @@
 # `ascend_prl` — 全球首个昇腾 NPU 加密货币矿工
 
+> **910B Profiler v3：** 預設 `HIT_EPOCH=1`，改為每個 Vector Core 獨立的 epoch 命中記錄，免去每次 strip 之間的 device memset。`HIT_EPOCH=0` 可作舊版 A/B 對照；GitHub Actions 有 `mbatch2_legacy` 和 `mbatch2`。詳見 [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md)。此修改**尚未在實際 NPU 上驗證**。
+
 [English](README.md) | **中文**
 
 一个从零编写、面向 [Pearl](https://arxiv.org/abs/2504.09971) **有用工作量证明（Proof-of-**Useful**-Work）** 币的矿工，

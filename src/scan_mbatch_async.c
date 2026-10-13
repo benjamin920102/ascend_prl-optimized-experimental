@@ -26,7 +26,7 @@ static struct {
     int started;
     const uint8_t *key; const uint32_t *target; int nbands, n_hi, G;
     volatile int hit_found; int hit_strip, hit_tile;
-} A = { PTHREAD_MUTEX_INITIALIZER };
+} A = { .mu = PTHREAD_MUTEX_INITIALIZER };
 
 int scan_full(const int8_t *a_noised, int num_strips,
               const uint8_t *key, const uint32_t *target,
@@ -52,12 +52,17 @@ int scan_full(const int8_t *a_noised, int num_strips,
 
     // Prime the pipeline, then submit the next super-strip before waiting on
     // the oldest one. The underlying kernel owns two in-flight buffer slots.
+    if (n_super <= 0) return 0;
     pearl_strip_submit_fast(a_noised);
+    int submitted = 1, completed = 0;
     for (int ss = 0; ss < n_super; ss++) {
-        if (ss + 1 < n_super)
+        if (ss + 1 < n_super) {
             pearl_strip_submit_fast(a_noised + (size_t)(ss + 1) * G * R * K);
+            ++submitted;
+        }
 
         pearl_strip_wait_done();
+        ++completed;
 
         int h_strip, h_tile;
         if (pearl_get_hit_result(&h_strip, &h_tile)) {
@@ -70,6 +75,12 @@ int scan_full(const int8_t *a_noised, int num_strips,
             pthread_mutex_unlock(&A.mu);
             break;
         }
+    }
+    // A hit may arrive while the next super-strip is already in flight.
+    // Drain it before pearl_use_b() resets shared producer/consumer flags.
+    while (completed < submitted) {
+        pearl_strip_wait_done();
+        ++completed;
     }
 
     pthread_mutex_lock(&A.mu);

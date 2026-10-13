@@ -1,4 +1,4 @@
-name: Ascend 910B - Checks, Build and Experimental Pre-release
+name: Ascend 910B - Epoch Hit Protocol CI and Experimental Builds
 
 on:
   pull_request:
@@ -7,13 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Kernel build profile (matrix builds all three separately)'
+        description: 'Kernel build profile (matrix builds legacy vs epoch A/B)'
         type: choice
         required: true
         default: mbatch2
         options:
           - baseline
           - mbatch2
+          - mbatch2_legacy
           - atpack
           - matrix
           - custom
@@ -41,6 +42,10 @@ on:
         description: 'Custom only: experimental repacked-A path'
         type: boolean
         default: false
+      custom_hit_epoch:
+        description: 'Custom only: per-core epoch hit records; false=legacy memset'
+        type: boolean
+        default: true
       publish_release:
         description: 'Also publish compiled artifacts as an UNVERIFIED pre-release'
         type: boolean
@@ -65,11 +70,18 @@ jobs:
           set -euo pipefail
           python3 tests/test_repack_layout.py
           python3 -m unittest discover -s tests -p 'test_ci_*.py' -v
+      - name: Compile and test epoch decoder and early-hit pipeline (pure host)
+        run: |
+          set -euo pipefail
+          c++ -O2 -std=c++17 -Wall -Wextra -Werror -pedantic -o "$RUNNER_TEMP/test_hit_epoch" tests/test_hit_epoch.cpp
+          "$RUNNER_TEMP/test_hit_epoch"
+          cc -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/test_scan_pipeline" tests/test_scan_pipeline.c -lpthread
+          "$RUNNER_TEMP/test_scan_pipeline"
       - name: Makefile passes optimization macros to CMake (dry run)
         run: |
           set -euo pipefail
-          make -n kernel RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 AT_PACK=1 > "$RUNNER_TEMP/make-kernel.txt"
-          for token in -DMBATCH=2 -DBUFS=2 -DVEC2X=2 -DBACKOFF=500 -DBASEN=128 -DAT_PACK=1; do
+          make -n kernel RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 AT_PACK=1 HIT_EPOCH=1 > "$RUNNER_TEMP/make-kernel.txt"
+          for token in -DMBATCH=2 -DBUFS=2 -DVEC2X=2 -DBACKOFF=500 -DBASEN=128 -DAT_PACK=1 -DHIT_EPOCH=1; do
             grep -F -- "$token" "$RUNNER_TEMP/make-kernel.txt"
           done
       - name: Explain validation boundary
@@ -94,10 +106,11 @@ jobs:
           INPUT_CUSTOM_BACKOFF: ${{ inputs.custom_backoff }}
           INPUT_CUSTOM_BASEN: ${{ inputs.custom_basen }}
           INPUT_CUSTOM_AT_PACK: ${{ inputs.custom_at_pack }}
+          INPUT_CUSTOM_HIT_EPOCH: ${{ inputs.custom_hit_epoch }}
         run: python3 scripts/ci_profiles.py
 
   build-arm64:
-    name: CANN9 ARM64 - ${{ matrix.id }} (MBATCH=${{ matrix.mbatch }}, AT_PACK=${{ matrix.at_pack }})
+    name: CANN9 ARM64 - ${{ matrix.id }} (MBATCH=${{ matrix.mbatch }}, HIT_EPOCH=${{ matrix.hit_epoch }})
     needs: plan-build
     if: github.event_name == 'workflow_dispatch'
     # Repository variable may select a self-hosted ARM64 runner with enough disk.
@@ -114,6 +127,7 @@ jobs:
       CI_BACKOFF: ${{ matrix.backoff }}
       CI_BASEN: ${{ matrix.basen }}
       CI_AT_PACK: ${{ matrix.at_pack }}
+      CI_HIT_EPOCH: ${{ matrix.hit_epoch }}
       CANN_TOOLKIT_URL: ${{ vars.CANN_TOOLKIT_URL || 'https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-toolkit_9.0.0_linux-aarch64.run' }}
     steps:
       - uses: actions/checkout@v4
@@ -164,7 +178,7 @@ jobs:
           sudo -H env \
             GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CI_BLK="$CI_BLK" \
             CI_MBATCH="$CI_MBATCH" CI_BUFS="$CI_BUFS" CI_VEC2X="$CI_VEC2X" \
-            CI_BACKOFF="$CI_BACKOFF" CI_BASEN="$CI_BASEN" CI_AT_PACK="$CI_AT_PACK" \
+            CI_BACKOFF="$CI_BACKOFF" CI_BASEN="$CI_BASEN" CI_AT_PACK="$CI_AT_PACK" CI_HIT_EPOCH="$CI_HIT_EPOCH" \
             bash scripts/ci_build.sh
       - name: Package separate, labeled experimental binaries
         env:
@@ -181,10 +195,10 @@ jobs:
           basename = f'ascend_prl_910b_{os.environ["PROFILE_NAME"]}_{os.environ["GITHUB_RUN_NUMBER"]}_{os.environ["GITHUB_RUN_ATTEMPT"]}'
           manifest = {
               "profile": os.environ["PROFILE_NAME"], "rank": 128,
-              **{key.lower(): int(os.environ[f'CI_{key}']) for key in ("MBATCH", "BUFS", "VEC2X", "BACKOFF", "BASEN", "AT_PACK")},
+              **{key.lower(): int(os.environ[f'CI_{key}']) for key in ("MBATCH", "BUFS", "VEC2X", "BACKOFF", "BASEN", "AT_PACK", "HIT_EPOCH")},
               "github_sha": os.environ["GITHUB_SHA"], "github_run_id": os.environ["GITHUB_RUN_ID"],
               "runtime_npu_verification": "NOT_RUN", "benchmark_ths": None,
-              "notes": "Compilation on ARM64 is not a proof-correctness or throughput test. AT_PACK is experimental.",
+              "notes": "Compilation on ARM64 is not a proof-correctness or throughput test. HIT_EPOCH=1 is an unverified runtime change; AT_PACK=1 is experimental.",
               "external_source_revisions": {
                   "pearl": Path('pearl-source-revision.txt').read_text().strip(),
                   "blake3": Path('blake3-source-revision.txt').read_text().strip(),
@@ -225,6 +239,6 @@ jobs:
           body: |
             ARM64 CANN 9.0.0 compile artifacts, built with separate profile-specific options.
             **NOT validated on Ascend 910B hardware; proof correctness and TH/s are unverified.**
-            Do not treat AT_PACK=1 as production-ready. See each accompanying manifest.
+            Do not treat HIT_EPOCH=1 or AT_PACK=1 as production-ready without verifier testing. See each accompanying manifest.
           files: release-files/*
           fail_on_unmatched_files: true

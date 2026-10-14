@@ -5,6 +5,7 @@
 #       DEVICES (space/comma davinci ids, default "4 5 6 7" — the mining NPUs)
 #       TAG (default ascend_prl:latest)  NAME (default ascend_prl)
 #       BIN (default kryptex binary; select ascend_prl_k1 for K1)
+#       PRL_LOG_INTERVAL_S (default 10; seconds between iteration status lines)
 set -eu
 : "${WALLET:?set WALLET=prl1...}"
 TAG="${TAG:-ascend_prl:latest}"; NAME="${NAME:-ascend_prl}"
@@ -29,6 +30,7 @@ docker run -d --name "$NAME" --network host --restart unless-stopped --privilege
   -e WALLET="$WALLET" -e POOL="$POOL" -e PORT="$PORT" \
   -e ASCEND_RT_VISIBLE_DEVICES="$vis" \
   ${BIN:+-e BIN="$BIN"} ${WORKER:+-e WORKER="$WORKER"} \
+  ${PRL_LOG_INTERVAL_S:+-e PRL_LOG_INTERVAL_S="$PRL_LOG_INTERVAL_S"} \
   ${PRL_COEXIST_GUARD:+-e PRL_COEXIST_GUARD="$PRL_COEXIST_GUARD"} \
   ${PRL_GUARD_POLL_MS:+-e PRL_GUARD_POLL_MS="$PRL_GUARD_POLL_MS"} \
   ${PRL_GUARD_ACK_S:+-e PRL_GUARD_ACK_S="$PRL_GUARD_ACK_S"} \

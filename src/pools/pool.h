@@ -27,7 +27,7 @@ typedef struct {
     int have;
 } mining_params_t;
 
-// User and developer sessions retain independent jobs and connection state.
+// Each pool connection retains its own job and transport state.
 typedef struct {
     int fd;
     pthread_mutex_t send_mu;

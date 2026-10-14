@@ -8,10 +8,9 @@ import os
 from pathlib import Path
 
 PRESETS = {
-    "baseline": {"mbatch": 1, "bufs": 4, "vec2x": 2, "backoff": 2000, "basen": 0, "at_pack": 0, "hit_epoch": 0},
-    "mbatch2_legacy": {"mbatch": 2, "bufs": 2, "vec2x": 2, "backoff": 500, "basen": 128, "at_pack": 0, "hit_epoch": 0},
-    "mbatch2": {"mbatch": 2, "bufs": 2, "vec2x": 2, "backoff": 500, "basen": 128, "at_pack": 0, "hit_epoch": 1},
-    "atpack": {"mbatch": 2, "bufs": 2, "vec2x": 2, "backoff": 500, "basen": 128, "at_pack": 1, "hit_epoch": 1},
+    "baseline": {"mbatch": 1, "bufs": 4, "vec2x": 2, "backoff": 2000, "basen": 0, "hit_epoch": 0},
+    "mbatch8_legacy": {"mbatch": 8, "bufs": 2, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 0},
+    "mbatch8": {"mbatch": 8, "bufs": 2, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 1},
 }
 
 
@@ -33,7 +32,6 @@ def validated(configuration):
         "vec2x": _integer(configuration["vec2x"], "VEC2X", 1, 4),
         "backoff": _integer(configuration["backoff"], "BACKOFF", 0, 100000),
         "basen": _integer(configuration["basen"], "BASEN", 0, 1024),
-        "at_pack": _integer(configuration["at_pack"], "AT_PACK", 0, 1),
         "hit_epoch": _integer(configuration["hit_epoch"], "HIT_EPOCH", 0, 1),
     }
     if p["bufs"] < p["vec2x"] or p["bufs"] % p["vec2x"]:
@@ -45,7 +43,7 @@ def validated(configuration):
 
 def make_matrix(profile, custom=None):
     if profile == "matrix":
-        names = ("baseline", "mbatch2_legacy", "mbatch2", "atpack")
+        names = ("baseline", "mbatch8_legacy", "mbatch8")
         configs = [(name, dict(PRESETS[name])) for name in names]
     elif profile == "custom":
         if custom is None:
@@ -60,22 +58,18 @@ def make_matrix(profile, custom=None):
 
 def main():
     custom = {
-        "mbatch": os.getenv("INPUT_CUSTOM_MBATCH", "2"),
+        "mbatch": os.getenv("INPUT_CUSTOM_MBATCH", "8"),
         "bufs": os.getenv("INPUT_CUSTOM_BUFS", "2"),
         "vec2x": os.getenv("INPUT_CUSTOM_VEC2X", "2"),
         "backoff": os.getenv("INPUT_CUSTOM_BACKOFF", "500"),
         "basen": os.getenv("INPUT_CUSTOM_BASEN", "128"),
-        "at_pack": os.getenv("INPUT_CUSTOM_AT_PACK", "false"),
         "hit_epoch": os.getenv("INPUT_CUSTOM_HIT_EPOCH", "true"),
     }
     # GitHub workflow_dispatch boolean inputs arrive as true/false strings.
-    if custom["at_pack"] not in ("true", "false"):
-        raise ValueError("INPUT_CUSTOM_AT_PACK must be true or false")
-    custom["at_pack"] = "1" if custom["at_pack"] == "true" else "0"
     if custom["hit_epoch"] not in ("true", "false"):
         raise ValueError("INPUT_CUSTOM_HIT_EPOCH must be true or false")
     custom["hit_epoch"] = "1" if custom["hit_epoch"] == "true" else "0"
-    plan = make_matrix(os.getenv("INPUT_PROFILE", "mbatch2"), custom)
+    plan = make_matrix(os.getenv("INPUT_PROFILE", "mbatch8"), custom)
     value = json.dumps(plan, separators=(",", ":"))
     print(json.dumps(plan, indent=2))
     out = os.getenv("GITHUB_OUTPUT")

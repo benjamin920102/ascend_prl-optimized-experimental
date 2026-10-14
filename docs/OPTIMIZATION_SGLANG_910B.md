@@ -1,6 +1,6 @@
 # ascend_prl / 910B4: SGLang-inspired optimization review
 
-**Status:** Experimental source patch. Code reviewed against the provided Oct 2026 snapshots, but not compiled or profiled on Ascend 910B4 / CANN 9.0 in this environment. Do not mine shares until the output passes reference proof verification. The original developer-fee logic is untouched.
+**Status:** Experimental source patch. Code reviewed against the provided Oct 2026 snapshots, but not compiled or profiled on Ascend 910B4 / CANN 9.0 in this environment. Do not mine shares until the output passes reference proof verification. All mining sessions use the configured wallet.
 
 ## 1. The mathematical constraint
 
@@ -12,7 +12,7 @@ Likewise, arbitrary `int32 -> int16/int8` conversion loses information. Even a s
 
 - `kernel/pearl_hlc2_cube.asc`: one `IterateAll(partG[Slot(lc,buf,p)])` per fold, one int32 partial per 64x128 output, for every band and strip.
 - `kernel/pearl_hlc2_vec.asc`: 32 partial reads and prefix folds, then per-tile scalar BLAKE3.
-- `kernel/pearl_hlc2_cube.asc::repackAT()`: exists but is **not called** from the production submit path; the path uploads the natural `[MBATCH*R,K]` layout.
+- `kernel/pearl_hlc2_cube.asc`: uploads the natural `[MBATCH*R,K]` A layout directly and uses a transposed Matmul view; there is no host-side A repacking stage.
 - `kernel/CMakeLists.txt`: has BACKOFF, but top-level `Makefile` previously hardcoded `BUFS=4`, `VEC2X=2` and did not pass `BACKOFF` or `BASEN`.
 - `src/prep.c::compute_bn_pack`: packs BT by `[band][fold][column][k]`; changing the fold grouping requires changing this packing and the proof definition, too.
 - `sglang-main/docs/docs/hardware-platforms/ascend-npus/development/operator_performance_optimizing.mdx`: recommends alignment, data reuse, double buffering and profiling. Actual Ascend C kernels are primarily in external `sgl-kernel-npu`, not in the supplied `sglang-main.zip`.
@@ -30,7 +30,7 @@ Per `band x logical strip` at RANK=128, MBATCH=1:
 | BT operand input over all folds (no cache accounting) | 64x4096 int8 | 256 KiB |
 | Allocated partial-ring capacity at BUFS=4 / MBATCH=1 | 20x4x32x32 KiB | 80 MiB |
 
-`MBATCH=2/4` amortizes BT reuse across strips but does **not** reduce 1 MiB partial write/read per *logical* strip. `BUFS=2` reduces partial-ring capacity to 40 MiB but may cause producer back-pressure.
+`MBATCH=2/4/8` amortizes BT reuse across strips but does **not** reduce 1 MiB partial write/read per *logical* strip. `BUFS=2` reduces partial-ring capacity to 40 MiB but may cause producer back-pressure.
 
 ## 4. Changes included in this experiment
 
@@ -38,7 +38,7 @@ Per `band x logical strip` at RANK=128, MBATCH=1:
 2. For `MBATCH=1`, replace zero-stride 2D DMA with an equivalent contiguous 32 KiB read.
 3. For `MBATCH>1`, reserve 4 KiB per lane for transcripts in vector UB. Compute all lanes' original folds first, finish partial GM reads, release the Cube slot, **then** hash each saved transcript. Original folding order, 32-bit arithmetic and transcript layout are kept.
 4. Add compile-time checks for UB footprint, slot scheduling divisibility and `K == NFOLD*NINNER*128`. RANK=128 explicitly requires `NFOLD=32,NINNER=1`.
-5. Add a **disabled-by-default experimental `AT_PACK=1`** path using the existing `repackAT()` and pinned staging. In this mode the per-fold A-side Matmul operand is `[MM_K, MM_N]` non-transposed. Both tiling and per-fold offsets change. This path requires CANN golden transcript testing before use; `AT_PACK=0` is the baseline.
+5. Use `MBATCH=8` by default in Makefile, CMake, both kernel fallbacks, and GitHub Actions. A inputs upload directly in their natural layout without an extra staging allocation or CPU transpose.
 
 **This patch does not reduce the total Fixpipe bytes**. It focuses on overlap and scheduling and exposes safe tiling experiments. Performance gains are hypotheses, not measured results.
 
@@ -53,15 +53,15 @@ make kernel RANK=128 MBATCH=1 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=0
 make kernel RANK=128 MBATCH=2 BUFS=4 VEC2X=2 BACKOFF=2000 BASEN=128
 make kernel RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128
 make kernel RANK=128 MBATCH=4 BUFS=4 VEC2X=2 BACKOFF=2000 BASEN=128
-# Experimental A layout: add AT_PACK=1 to a separately built benchmark.
-make kernel RANK=128 MBATCH=2 BUFS=4 VEC2X=2 BACKOFF=2000 BASEN=128 AT_PACK=1
+make kernel RANK=128 MBATCH=8 BUFS=4 VEC2X=2 BACKOFF=2000 BASEN=0
+make kernel RANK=128 MBATCH=8 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128
 ```
 
-Build **complete binaries** with matching `make RANK=128 MBATCH=N ...` and test each independently. Changing only the `.so` while keeping incompatible proof/host binaries is unsafe. Ensure the real benchmark uses normal folding (do not set `PRL_NOFOLD`). Capture sustained verified logical TH/s, NPU-side timings, host repack/H2D time, Cube/Vector kernel occupancy and back-pressure. Monitor the absolute `aic_fixpipe_time` and `aiv_mte2_time` as well as their ratios; overlapping pipeline percentages need not total 100%.
+Build **complete binaries** with matching `make RANK=128 MBATCH=N ...` and test each independently. Changing only the `.so` while keeping incompatible proof/host binaries is unsafe. Ensure the real benchmark uses normal folding (do not set `PRL_NOFOLD`). Capture sustained verified logical TH/s, NPU-side timings, host preparation/H2D time, Cube/Vector kernel occupancy and back-pressure. Monitor the absolute `aic_fixpipe_time` and `aiv_mte2_time` as well as their ratios; overlapping pipeline percentages need not total 100%.
 
 ### Correctness gates
 
-- Compare MBATCH=1 and MBATCH=2/4 using **identical** logical A/B matrices. The resulting 16-word transcript for each `(strip, band, tile)` must be bit-for-bit identical.
+- Compare MBATCH=1 and MBATCH=2/4/8 using **identical** logical A/B matrices. The resulting 16-word transcript for each `(strip, band, tile)` must be bit-for-bit identical.
 - Run `zk_pow` reference proof verification for each accepted hit; do not rely only on GPU-side BLAKE3 comparisons.
 - Include `n_hi` values >1, last band, ring wraparound, at least 3 in-flight strips, repeated workload changes, and cases where B buffer flips while A is in flight.
 - Verify no producer/consumer stalls or hangs under `BUFS=2`; any dropped share/incorrect proof is a blocker.
@@ -69,19 +69,15 @@ Build **complete binaries** with matching `make RANK=128 MBATCH=N ...` and test 
 
 ## 6. Highest-potential NEXT experiments, not implemented
 
-### A. Repacked-A experiment (implemented behind `AT_PACK=1`, not validated on-device)
-
-The existing unused `repackAT` prepares A as `[KFULL][R*MBATCH]`, making each fold contiguous. The experimental mode changes Matmul B to a **non-transposed** ND layout, updates `SetBType`, `MatmulType`, `SetOrgShape` and `SetTensorB` offsets, and uploads via pinned staging. It should turn the row-strided input into larger contiguous DMA; however CPU repacking and Matmul tiling overhead can negate the win. `AT_PACK=1` has not been compiled or verified on CANN here, and the exact performance impact is unknown. First run `tests/test_repack_layout.py`, then bitwise compare the actual NPU output against canonical proof verification.
-
-### B. Fold-stage streaming ring (likely working-set / overlap lever)
+### A. Fold-stage streaming ring (likely working-set / overlap lever)
 
 Keep `NFOLD=32` and output each `partial[p]` losslessly, but replace `[BUFS][NFOLD][64][128]` whole-band ring with a `[BUFS][STAGES][64][128]` window (STAGES=2 or 4). Publish/acknowledge each fold stage, never overwrite before the consumer's MTE2 completed. Let Vector fold the stages in the exact p order. This reduces **ring storage** (up to 8–16x), not per-strip write/read bytes. A mixed AIC/AIV launch with supported cross-core flags may cut per-stage synchronization overhead. CANN high-level Matmul internally uses some cross-core flag resources, so consult the exact CANN 9.0 build and avoid flag ID conflicts/deadlock.
 
-### C. Vector UB prefetch / double-buffer (likely AIV MTE2 stall lever)
+### B. Vector UB prefetch / double-buffer (likely AIV MTE2 stall lever)
 
 Allocate two 32 KiB partial buffers. While consuming `partial[p]`, issue MTE2 for `partial[p+1]` into the other buffer, with correct `MTE2_V` and `V_MTE2` dependencies before either read or buffer reuse. The present `PipeBarrier<PIPE_ALL>` after every `Add` prevents overwrite hazards but also inhibits overlap. Implement only with actual-device tests. UB footprint should remain below hardware limits.
 
-### D. Avoid premature L0C accumulation / lossy int16 partials
+### C. Avoid premature L0C accumulation / lossy int16 partials
 
 L0C accumulation in K is only valid **within each canonical fold**, not across the 32 fold steps. `int16` alone is insufficient for exact dot products. A custom lossless representation would require proven range, packing cost model and a path that genuinely shrinks Fixpipe output traffic.
 

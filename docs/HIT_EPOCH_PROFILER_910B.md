@@ -19,12 +19,12 @@ Use the **same** rank and tiling for a fair epoch-vs-legacy comparison. Keep bui
 
 ```bash
 # Legacy control (all else identical)
-make RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 AT_PACK=0 HIT_EPOCH=0 all
+make RANK=128 MBATCH=8 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=0 all
 # Optimized
-make RANK=128 MBATCH=2 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 AT_PACK=0 HIT_EPOCH=1 all
+make RANK=128 MBATCH=8 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1 all
 ```
 
-Build outputs have the same names and must not be mixed. CI has profiles `mbatch2_legacy` and `mbatch2` that package them separately. Confirm process startup prints `HIT_EPOCH=1` for the new build.
+Build outputs have the same names and must not be mixed. CI has profiles `mbatch8_legacy` and `mbatch8` that package them separately. Confirm process startup prints `HIT_EPOCH=1` for the new build.
 
 Run both with `PRL_LOOP_PROF=1` (export it before calling the background launcher), save logs, compare `scan_full` distribution (p50/p95/p99), **verified shares**, and throughput on equivalent work. In a new `msprof` run compare Host `aclrtMemsetAsync` count/duration, Cube scalar tail, Kernel timeline overlap and device-to-host memory copies. A significant reduction in memset calls without faster sustained iter/s is possible: new result D2H is ~20KiB instead of 8B for `GRID=20,VEC2X=2`.
 

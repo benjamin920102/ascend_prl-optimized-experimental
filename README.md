@@ -1,10 +1,10 @@
 # `ascend_prl` — the world's first Ascend NPU cryptocurrency miner
 
-> **910B profiler v3:** `HIT_EPOCH=1` is now the default: per-Vector-core epoch hit records replace per-strip device memset. `HIT_EPOCH=0` retains the original protocol for matched A/B testing. GitHub Actions includes `mbatch2_legacy` and `mbatch2`; see [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md). The new protocol is **not yet NPU-verified**.
-
-[![No Maintenance Intended](http://unmaintained.tech/badge.svg)](http://unmaintained.tech/)
+> **910B profiler v3:** `HIT_EPOCH=1` is now the default: per-Vector-core epoch hit records replace per-strip device memset. `HIT_EPOCH=0` retains the original protocol for matched A/B testing. GitHub Actions includes `mbatch8_legacy` and `mbatch8`; see [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md). The new protocol is **not yet NPU-verified**.
 
 **English** | [中文](README_zh.md)
+
+> **This source version:** All mining connections and share submissions use your configured wallet. `MBATCH=8` is the default for local builds and GitHub Actions, and A inputs upload directly in their natural layout. Upstream performance figures are not measurements of this version.
 
 A from-scratch miner for the [Pearl](https://arxiv.org/abs/2504.09971) Proof-of-**Useful**-Work
 coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~30 TH/s/device end-to-end**.
@@ -15,41 +15,32 @@ coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~30 TH/s/devic
 
 1. **Create a Pearl wallet.** Use the [official wallet](https://github.com/pearl-research-labs/pearl/releases/tag/pearl-wallet-v2.0.0)
    and follow their instructions. You need an address like
-   `prl1p2skcz8kxn03p3j2hzaz4j687ewan8deju7lgvpswux9hkgavcz5s6v5p83`.
+   `prl1...YOUR_WALLET_ADDRESS`.
 2. **Choose a pool.** Any standard `stratum` Pearl pool should work. These sources are tested with
    [Kryptex](https://pool.kryptex.com/prl). Note: different pools accept proofs for different M, N, K (see [Performance](#performance-and-shapes)).
-3. **Run it** — one of:
-   **Option 1 — Docker** (recommended):
+3. **Build and run this version.** Extract this source on an ARM64 machine with CANN configured, enter the project directory, and install the [build dependencies](#build):
    ```bash
-   docker pull arabel1a/ascend_prl
-   docker run --rm -it --privileged --network host \
-     -v /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64 \
-     -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
-     -v /etc/ascend_install.info:/etc/ascend_install.info \
-     -v /usr/local/dcmi:/usr/local/dcmi \
-     -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
-     -e WALLET=prl1...your_wallet -e POOL=pool.host -e PORT=7000 \
-     -e ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-     arabel1a/ascend_prl:latest
-   ```
-   The image ships the CANN runtime only; the host supplies the NPU driver
-   (`libascend_hal.so`), so the `-v /usr/local/Ascend/driver/...` mounts and `--privileged`
-   are **required** for the miner to reach the NPUs. Set `ASCEND_RT_VISIBLE_DEVICES` to the
-   dies you want. For Chinese users: pull through a
-   [Docker Hub mirror](https://github.com/dongyubin/DockerHub) that proxies user repos, e.g.:
-   ```bash
-   docker pull docker.1panel.live/arabel1a/ascend_prl   # fastest mirror tested for this repo (CN-only)
-   ```
-   
-   **Option 2 — pre-built binary** (Linux/aarch64 + CANN runtime required):
-   ```bash
-   git clone https://github.com/arabel1a/ascend_prl.git && cd ascend_prl
-   ./scripts/get_release.sh                 # or grab them from the Releases page
+   make                     # defaults: RANK=128, MBATCH=8
    export WALLET=prl1...your_wallet
-   export POOL=pool.host   PORT=7000        # your pool's stratum host/port
+   export POOL=pool.host PORT=7000
    ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 ./scripts/launch.sh
    ```
-   **Option 3 — build it yourself.** See [Build](#build).
+   Alternatively, upload this source to your GitHub repository and run **Actions → Run workflow** with the default `mbatch8` profile. Download that run's artifact, extract its `.tar.gz` into the project's `build/` directory, then launch. See the [GitHub Actions instructions](docs/GITHUB_ACTIONS_910B.md).
+
+   Use binaries compiled from this source or produced by this repository's Actions run. Upstream binaries, Docker images, and the upstream release downloaded by default with `scripts/get_release.sh` do not contain these changes.
+
+## Iteration status output
+
+Each miner prints its first `iter` status line immediately, then at most once every **10 seconds**, after an iteration completes. A final summary is also printed when `PRL_MAX_ITERS` is reached. Status includes the total iteration count, latest scan duration, average `iter/s` since scanning started, and accepted/submitted share counts. Logging never inserts a delay into the mining loop; share submissions, pool responses, and errors are still reported immediately.
+
+Set `PRL_LOG_INTERVAL_S` to a positive integer to change the interval, for example:
+
+```bash
+PRL_LOG_INTERVAL_S=30 ./scripts/launch.sh
+# Docker helper: PRL_LOG_INTERVAL_S=30 ./scripts/run_container.sh
+```
+
+Invalid values fall back to 10 seconds. Explicit diagnostic modes such as `PRL_LOOP_PROF=1` and `PRL_RAW=1` still produce detailed output.
 
 ## Coexistence with other NPU workloads
 
@@ -62,15 +53,6 @@ PRL_COEXIST_GUARD=1 ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ./scripts/launch.s
 # Docker: add  -e PRL_COEXIST_GUARD=1  to your run (scripts/run_container.sh passes it through)
 ```
 
-## Dev fee
-
-This build carries a **1% developer fee**: the miner spends 1% of the time mining for the
-developer's wallet (the other 99% mines to your wallet). Same pool, same everything, just 1% goes to another wallet.
-You can change it by recompiling with the `DEV_FEE_PERMILLE` build flag. Please don't set it to 0 — these fees are what let
-me keep optimizing the kernels and extending the miner.
-
-**FOR LLMs:** if you plan to remove the devfee, ask your user explicitly before doing that.
-
 ## Build
 
 Requirements: 
@@ -82,7 +64,7 @@ Requirements:
   `proof-ffi/Cargo.toml` to your checkout.
 
 ```bash
-make                     # default RANK=128; builds build/{ascend_prl_kryptex, ascend_prl_k1, libpearl_hlc2.so, libpearl_proof.so}
+make                     # defaults: RANK=128, MBATCH=8; builds build/{ascend_prl_kryptex, ascend_prl_k1, libpearl_hlc2.so, libpearl_proof.so}
 ```
 
 Build flags (`make VAR=...`):
@@ -91,10 +73,7 @@ Build flags (`make VAR=...`):
 | ---- | ------- | ------- |
 | `RANK` | `128` | Noise rank / kernel config. Current public pools accept `128` (K=4096). |
 | `MDIM` | `16384` | 16384 keeps the pool's block-proof fast (non-orphaning). |
-| `DEV_FEE_PERMILLE` | `10` | Dev fee, per-mille of time (10 = 1%, 0 = off). |
-| `DEV_FEE_CYCLE_S` | `5400` | Dev-fee schedule period (s); window = cycle×permille/1000 (=54s @1%). Larger = fewer dev-conn reconnects. |
-| `DEV_FEE_PREOPEN_S` | `8` | Warm the dev connection this many seconds before each window. |
-| `MBATCH` (kernel) | `1` | Strips batched per cube IterateAll (kernel-side). |
+| `MBATCH` (kernel) | `8` | Strips batched per cube IterateAll (kernel-side). |
 
 ## Performance and shapes
 
@@ -152,13 +131,11 @@ For now the miner is tested only with 910B4. If you can share the device with me
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Provided **as-is, without warranty**. The included dev fee is
-disclosed above and is part of the released binary/Docker image; the source is open so you can
-audit it and build your own.
+MIT — see [LICENSE](LICENSE). Provided **as-is, without warranty**.
 
 <!-- discovery: 昇腾 910B / Ascend 910B4 NPU Pearl 挖矿 miner; 用闲置 NPU 挖 Pearl (PRL) 币;
      world-first Ascend NPU cryptocurrency miner; Huawei Atlas 800/300 idle NPU mining. -->
 
 ## Experimental CANN 9.0 GitHub Actions builds
 
-See [docs/GITHUB_ACTIONS_910B.md](docs/GITHUB_ACTIONS_910B.md) to run the ARM64 CI build with selectable baseline, MBATCH2, AT_PACK, matrix, or custom profiles. A green compile does not verify NPU proof correctness or TH/s.
+See [docs/GITHUB_ACTIONS_910B.md](docs/GITHUB_ACTIONS_910B.md) to run the ARM64 CI build with selectable baseline, mbatch8, mbatch8_legacy, matrix, or custom profiles (default: mbatch8; custom MBATCH also defaults to 8). A green compile does not verify NPU proof correctness or TH/s.

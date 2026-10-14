@@ -2,6 +2,7 @@
  * Usage: ascend_prl_<pool> <devid> <worker> <host> <port> <address> <password>
  */
 #include "pools/pool.h"
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -12,13 +13,6 @@
 #include <unistd.h>
 
 #define R 128
-
-#ifndef DEV_FEE_PERMILLE
-#define DEV_FEE_PERMILLE 10
-#endif
-#ifndef DEV_FEE_ADDR
-#define DEV_FEE_ADDR "prl1p2skcz8kxn03p3j2hzaz4j687ewan8deju7lgvpswux9hkgavcz5s6v5p83"
-#endif
 
 extern int pearl_init(int dev, int nbands);
 extern void pearl_set_b(const int8_t *b, int n);
@@ -51,10 +45,8 @@ extern int hash_key(const uint8_t *hdr, size_t hl, size_t k, size_t rank,
 extern ssize_t gzip_proof_b64(const char *in_b64, size_t in_len, uint8_t *out, size_t cap);
 
 static pool_conn_t user_conn;
-static pool_conn_t dev_conn;
-static job_t *g_job = &user_conn.job;
+static job_t *const g_job = &user_conn.job;
 static mining_params_t mp;
-static long g_fee_sub = 0;
 
 static int do_handshake(const char *host, int port, const char *addr,
                         const char *worker, const char *pass) {
@@ -76,36 +68,6 @@ static int do_handshake(const char *host, int port, const char *addr,
            POOL.name, mp.rank, mp.k, mp.m, mp.n);
     return 0;
 }
-
-#if DEV_FEE_PERMILLE > 0
-#ifndef DEV_FEE_CYCLE_S
-#define DEV_FEE_CYCLE_S 5400
-#endif
-#ifndef DEV_FEE_PREOPEN_S
-#define DEV_FEE_PREOPEN_S 8
-#endif
-static int g_dev_now = 0;
-static time_t g_fee_anchor = 0;
-// The developer connection is prewarmed before its periodic time slice begins.
-static long dev_secs_to_window(void) {
-    if (!g_fee_anchor) g_fee_anchor = time(0);
-    long cyc = DEV_FEE_CYCLE_S, win = cyc * DEV_FEE_PERMILLE / 1000; if (win < 1) win = 1;
-    long t = (long)((time(0) - g_fee_anchor) % cyc);
-    return t < win ? 0 : cyc - t;
-}
-static int dev_open(const char *host, int port, const char *worker, const char *pass) {
-    dev_conn.msg_id = 0; dev_conn.job.have = 0;
-    if (POOL.open(&dev_conn, host, port, DEV_FEE_ADDR, worker, pass, &mp)) { dev_conn.dead = 1; return -1; }
-    printf("[dev-fee] warming dev connection (%s)\n", DEV_FEE_ADDR);
-    return 0;
-}
-static void dev_close(void) {
-    if (dev_conn.fd >= 0) { dev_conn.dead = 1; close(dev_conn.fd); dev_conn.fd = -1; }
-    dev_conn.job.have = 0;
-}
-#else
-#define g_dev_now 0
-#endif
 
 typedef struct {
     int8_t *A, *B, *An, *Btn, *EAL, *EBR;
@@ -255,15 +217,19 @@ int main(int argc, char **argv) {
         sigaction(SIGUSR2, &sa, 0);
     }
     setvbuf(stdout, 0, _IOLBF, 0);
+    long log_interval_s = 10;
+    const char *log_env = getenv("PRL_LOG_INTERVAL_S");
+    if (log_env) {
+        char *end;
+        errno = 0;
+        long value = strtol(log_env, &end, 10);
+        if (!errno && end != log_env && !*end && value >= 1)
+            log_interval_s = value;
+        else
+            fputs("[!] PRL_LOG_INTERVAL_S must be a positive integer; using 10s\n", stderr);
+    }
     g_reuse_b = getenv("PRL_REUSE_B") ? 1 : 0;
     pool_conn_init(&user_conn, "");
-    pool_conn_init(&dev_conn, " [dev]");
-#if DEV_FEE_PERMILLE > 0
-    printf("[dev-fee] This open-source build mines %.1f%% of the time for the developer\n"
-           "[dev-fee]   wallet: %s\n"
-           "[dev-fee]   To disable, rebuild from source: make DEV_FEE_PERMILLE=0\n",
-           DEV_FEE_PERMILLE / 10.0, DEV_FEE_ADDR);
-#endif
 
     POOL.init_params(&mp);
     printf("[stratum] pool=%s\n", POOL.name);
@@ -301,30 +267,13 @@ int main(int argc, char **argv) {
     pthread_t pt;
     pthread_create(&pt, 0, prep_worker, &bun[0]);
     long iter = 0;
-    time_t t_start = time(0);
+    struct timespec stats_start;
+    clock_gettime(CLOCK_MONOTONIC, &stats_start);
+    double last_log_elapsed = 0;
     while (1) {
-#if DEV_FEE_PERMILLE > 0
-        {
-            long s2w = dev_secs_to_window();
-            if (dev_conn.fd < 0 && s2w <= DEV_FEE_PREOPEN_S) dev_open(host, port, worker, pass);
-            if (s2w == 0 && !g_dev_now && !dev_conn.dead && dev_conn.job.have) {
-                g_dev_now = 1; g_job = &dev_conn.job;
-                printf("[dev-fee] window OPEN -> mining for dev\n");
-            }
-            if ((s2w != 0 || dev_conn.dead) && g_dev_now) {
-                g_dev_now = 0; g_job = &user_conn.job;
-                printf("[dev-fee] window CLOSE -> mining for user (dev shares so far %ld)\n", g_fee_sub);
-                dev_close();
-            }
-            if (s2w > DEV_FEE_PREOPEN_S && dev_conn.fd >= 0 && !g_dev_now) dev_close();
-        }
-#endif
         if (user_conn.dead) {
             puts("[!] (re)connecting");
             close(user_conn.fd);
-#if DEV_FEE_PERMILLE > 0
-            if (g_dev_now) { g_dev_now = 0; g_job = &user_conn.job; dev_close(); }
-#endif
             while (do_handshake(host, port, addr, worker, pass)) sleep(10);
         }
         // Two bundles let CPU preparation and B transfer overlap NPU scanning.
@@ -348,7 +297,6 @@ int main(int argc, char **argv) {
         }
         pthread_create(&pt, 0, prep_worker, nxt);
 
-        time_t t0 = time(0);
         struct timespec sa; clock_gettime(CLOCK_MONOTONIC, &sa);
         if (pearl_use_b) pearl_use_b(g_reuse_b ? 0 : cur->slot);
         else pearl_set_b(cur->Btn, (int)N);
@@ -381,8 +329,7 @@ int main(int argc, char **argv) {
                                          cur->key, rows_abs, mp.nrows, cols_abs, mp.ncols,
                                          b64, 64 << 20);
             if (bl > 0) {
-                pool_conn_t *sc = g_dev_now ? &dev_conn : &user_conn;
-                const char *sub_addr = g_dev_now ? DEV_FEE_ADDR : addr;
+                pool_conn_t *sc = &user_conn;
                 const uint8_t *payload = b64; size_t plen = (size_t)bl;
                 if (sc->gzip) {
                     ssize_t gl = gzip_proof_b64((const char *)b64, (size_t)bl, gzbuf, 64 << 20);
@@ -394,7 +341,7 @@ int main(int argc, char **argv) {
                     fputs("[!] cannot allocate share message\n", stderr);
                 } else {
                     const char *tail;
-                    int hl = POOL.submit_prefix(sc, sub_addr, worker, cur->job_id, msg, 512, &tail);
+                    int hl = POOL.submit_prefix(sc, addr, worker, cur->job_id, msg, 512, &tail);
                     if (hl < 0 || hl >= 512) {
                         fputs("[!] share prefix exceeds message capacity\n", stderr);
                     } else {
@@ -408,24 +355,31 @@ int main(int argc, char **argv) {
                             pool_send_line_n(sc, msg, (size_t)hl + plen + tail_len);
                             if (getenv("PRL_RAW")) fprintf(stderr, "[raw>] %s\n", msg);
                             shares_sub++;
-                            if (g_dev_now) g_fee_sub++;
-                            printf("[✓]%s share row=%ld col=%ld job=%s (%ld submitted, %ld dev)\n",
-                                   g_dev_now ? " [dev]" : "", row, col, cur->job_id, shares_sub, g_fee_sub);
+                            printf("[✓] share row=%ld col=%ld job=%s (%ld submitted)\n",
+                                   row, col, cur->job_id, shares_sub);
                         }
                     }
                     free(msg);
                 }
             } else printf("[!] proof build failed %zd\n", bl);
         }
-        double el = difftime(time(0), t_start);
-        printf("[*] iter %ld scan %.0fs%s | %.3f iter/s | shares %ld/%ld\n",
-               iter, difftime(time(0), t0), rc ? " HIT" : "", iter / (el > 0 ? el : 1), shares_acc, shares_sub);
-        {
-            const char *mi = getenv("PRL_MAX_ITERS");
-            if (mi && iter >= atol(mi)) {
-                puts("[*] PRL_MAX_ITERS reached, exiting");
-                break;
-            }
+        const char *mi = getenv("PRL_MAX_ITERS");
+        const int stopping = mi && iter >= atol(mi);
+        struct timespec stats_now;
+        clock_gettime(CLOCK_MONOTONIC, &stats_now);
+        const double elapsed = (stats_now.tv_sec - stats_start.tv_sec)
+                             + (stats_now.tv_nsec - stats_start.tv_nsec) / 1e9;
+        // Rate-limit status output only; never delay scanning or share submission.
+        // Print the first iteration and the final summary even on a short run.
+        if (iter == 1 || stopping || elapsed - last_log_elapsed >= log_interval_s) {
+            const double scan_s = (sb.tv_sec - sa.tv_sec) + (sb.tv_nsec - sa.tv_nsec) / 1e9;
+            printf("[*] iter %ld scan %.3fs%s | %.3f iter/s | shares %ld/%ld\n",
+                   iter, scan_s, rc ? " HIT" : "", iter / (elapsed > 0 ? elapsed : 1), shares_acc, shares_sub);
+            last_log_elapsed = elapsed;
+        }
+        if (stopping) {
+            puts("[*] PRL_MAX_ITERS reached, exiting");
+            break;
         }
     }
     return 0;

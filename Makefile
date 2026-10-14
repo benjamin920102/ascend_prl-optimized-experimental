@@ -31,17 +31,13 @@ BLK  ?= $(shell ls -d /root/.cargo/registry/src/*/blake3-1*/c 2>/dev/null | head
 BLK_SRC := $(BLK)/blake3.c $(BLK)/blake3_dispatch.c $(BLK)/blake3_portable.c $(BLK)/blake3_neon.c
 CC   := gcc
 # BLAKE3_USE_TBB uses the pthread split hook in blake3_join.c (not oneTBB).
-# DEV_FEE_PERMILLE=0 disables the developer time slice.
-DEV_FEE_PERMILLE ?= 10
-CFLAGS := -O3 -fopenmp -march=armv8-a+crypto -DBLAKE3_USE_NEON=1 -DBLAKE3_USE_TBB -DK=$(K) -DRANK=$(RANK) -DMDIM=$(MDIM) -DDEV_FEE_PERMILLE=$(DEV_FEE_PERMILLE) -I$(BLK)
+CFLAGS := -O3 -fopenmp -march=armv8-a+crypto -DBLAKE3_USE_NEON=1 -DBLAKE3_USE_TBB -DK=$(K) -DRANK=$(RANK) -DMDIM=$(MDIM) -I$(BLK)
 RPATH  := -Wl,-rpath,'$$ORIGIN'
-MBATCH ?= 1
+MBATCH ?= 8
 BUFS ?= 4
 VEC2X ?= 2
 BACKOFF ?= 2000
 BASEN ?= 0
-# Experimental: transpose A into contiguous per-fold [K,N] layout
-AT_PACK ?= 0
 # Epoch-tagged, per-Vector-core hit protocol eliminates a per-strip device memset.
 # HIT_EPOCH=0 restores the legacy path for matched A/B profiling.
 HIT_EPOCH ?= 1
@@ -78,7 +74,7 @@ kernel: $(OUT)
 	cd kernel && rm -rf build && mkdir build && cd build && \
 	  cmake -DCMAKE_ASC_RUN_MODE=npu -DCMAKE_ASC_ARCHITECTURES=dav-2201 \
 	        -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=$(BUFS) -DVEC2X=$(VEC2X) -DMBATCH=$(MBATCH) \
-	        -DBACKOFF=$(BACKOFF) -DBASEN=$(BASEN) -DKERNEL_K=$(K) -DAT_PACK=$(AT_PACK) -DHIT_EPOCH=$(HIT_EPOCH) \
+	        -DBACKOFF=$(BACKOFF) -DBASEN=$(BASEN) -DKERNEL_K=$(K) -DHIT_EPOCH=$(HIT_EPOCH) \
 	        -DCMAKE_MODULE_PATH="$$ASC_MODULES" .. && make -j
 	cp kernel/build/libpearl_hlc2.so $(OUT)/
 

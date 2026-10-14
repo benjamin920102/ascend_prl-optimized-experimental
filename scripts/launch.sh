@@ -5,6 +5,7 @@
 # Env:  WALLET (required)  POOL (default 127.0.0.1)  PORT (default 7000)
 #       ASCEND_RT_VISIBLE_DEVICES (comma list; default = all NPUs)  WORKER (default npu)
 #       BIN (default: first of ./build/ascend_prl_kryptex, _k1, ascend_prl that exists)
+#       PRL_LOG_INTERVAL_S (default 10; seconds between iteration status lines)
 #       PRL_PIN_AVOID_RE (regex of already-running miners whose nodes to avoid; default below)
 set -u
 cd "$(dirname "$0")/.."
@@ -22,7 +23,7 @@ if [ -z "${BIN:-}" ]; then
   done
   BIN="${BIN:-./build/ascend_prl_kryptex}"
 fi
-[ -x "$BIN" ] || { echo "miner binary not found: $BIN (build it, or run scripts/get_release.sh)"; exit 1; }
+[ -x "$BIN" ] || { echo "miner binary not found: $BIN (build this source, or extract this repository's Actions artifact into build/)"; exit 1; }
 source /usr/local/Ascend/cann-*/set_env.sh 2>/dev/null
 
 if [ -n "${ASCEND_RT_VISIBLE_DEVICES:-}" ]; then

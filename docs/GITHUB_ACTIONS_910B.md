@@ -4,23 +4,23 @@
 
 `.github/workflows/main.yml` has these phases:
 
-1. **PR / main push:** `host-checks` runs Python profile tests, compiles and executes pure-host C++ hit epoch decoder tests, tests the production scan pipeline with a mocked NPU API, and checks `make -n` macro propagation. This phase does **not** compile `.asc` or exercise an NPU.
+1. **PR / main push:** `host-checks` runs Python profile tests, compiles and executes pure-host C++ hit epoch decoder tests, tests the production scan pipeline with a mocked NPU API, tests per-thread context binding with a mocked ACL runtime, and checks `make -n` macro propagation. This phase does **not** compile `.asc` or exercise an NPU.
 2. **Actions -> Run workflow (manual):** `plan-build` validates inputs, then `build-arm64` compiles `kernel`, `proof`, and both miners. It uses `ubuntu-22.04-arm` by default, and installs CANN 9.0.0. No NPU device is available on a standard GitHub-hosted runner.
 3. **Optional pre-release:** `publish_release=true` publishes experimental build artifacts only when *all selected compilation jobs succeed*. Default is `false`, leaving artifacts under the Actions run for 14 days.
 
 ## Build profiles
 
-| Profile | MBATCH | BUFS | BASEN | HIT_EPOCH | Purpose |
-|---|---:|---:|---:|---:|---|
-| `baseline` | 1 | 4 | 0 | **0** | Explicit opt-in reference with the original kernel/hit protocol |
-| `mbatch8_legacy` | 8 | 2 | 128 | **0** | Matched A/B control retaining per-strip memset |
-| `mbatch8` (default) | 8 | 2 | 128 | **1** | Eight strips per batch with per-core hit epochs |
-| `matrix` | — | — | — | — | Independently compile all three profiles |
-| `custom` | 8 by default | Chosen | Chosen | Chosen | User-specified profile and epoch mode |
+| Profile | MBATCH | BUFS | BACKOFF | BASEN | HIT_EPOCH | Purpose |
+|---|---:|---:|---:|---:|---:|---|
+| `baseline` | 1 | 4 | 2000 | 0 | **0** | Explicit opt-in reference with the original kernel/hit protocol |
+| `mbatch8_legacy` | 8 | 4 | 2000 | 128 | **0** | Matched A/B control retaining per-strip memset |
+| `mbatch8` (default) | 8 | 4 | 2000 | 128 | **1** | Eight strips per batch with per-core hit epochs |
+| `matrix` | — | — | — | — | — | Independently compile all three profiles |
+| `custom` | 8 | 4 | 2000 | 128 | **1** | Defaults shown; each custom input can be overridden |
 
-All presets target `RANK=128`, `VEC2X=2`. `baseline` uses `BACKOFF=2000`; the other presets use `BACKOFF=500`.
+All presets target `RANK=128`, `VEC2X=2`, `BUFS=4`, `BACKOFF=2000`.
 
-Both the workflow selection and `scripts/ci_profiles.py` default to `mbatch8`. Custom MBATCH defaults to 8 as well. The `baseline` profile deliberately keeps MBATCH=1 for comparison; select it explicitly only when needed. Local Makefile/CMake defaults use `MBATCH=8`, `BUFS=4`, `BASEN=0`, and `BACKOFF=2000`; pass the CI preset values explicitly for a matched local build. A-side input always uses the natural row-major layout with direct H2D upload.
+Both the workflow selection and `scripts/ci_profiles.py` default to `mbatch8`. Custom inputs also default to `MBATCH=8`, `BUFS=4`, `VEC2X=2`, `BACKOFF=2000`, `HIT_EPOCH=1`. The `baseline` profile deliberately keeps MBATCH=1 for comparison; select it explicitly only when needed. Local Makefile/CMake defaults use the same five values. The existing `BASEN` choice is unchanged: local `0`, CI mbatch8/custom `128`; pass `BASEN=128` locally for a matched build. A-side input always uses the natural row-major layout with direct H2D upload.
 
 **Compare `mbatch8_legacy` and `mbatch8` first.** They differ **only** in `HIT_EPOCH`, isolating the observed `aclrtMemsetAsync` long-tail hypothesis. `baseline` differs in multiple tiling parameters and cannot isolate the change.
 
@@ -50,7 +50,9 @@ Build dependencies `pearl` and BLAKE3 are fetched from their upstream repositori
 python3 -m unittest discover -s tests -p 'test_ci_*.py' -v
 c++ -O2 -std=c++17 -Wall -Wextra -Werror -pedantic -o /tmp/test_hit_epoch tests/test_hit_epoch.cpp && /tmp/test_hit_epoch
 cc -O2 -std=c11 -Wall -Wextra -Werror -o /tmp/test_scan_pipeline tests/test_scan_pipeline.c -lpthread && /tmp/test_scan_pipeline
+c++ -O2 -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Itests/stubs -o /tmp/test_host_context tests/test_host_context.cpp && /tmp/test_host_context
 python3 scripts/ci_profiles.py  # profile=mbatch8 by default
 INPUT_PROFILE=matrix python3 scripts/ci_profiles.py
-make -n kernel RANK=128 MBATCH=8 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1
+make -n kernel  # checks local defaults
+make -n kernel RANK=128 MBATCH=8 BUFS=4 VEC2X=2 BACKOFF=2000 BASEN=128 HIT_EPOCH=1
 ```

@@ -24,7 +24,7 @@ on:
       custom_bufs:
         description: 'Custom only: BUFS (multiple of VEC2X)'
         type: string
-        default: '2'
+        default: '4'
       custom_vec2x:
         description: 'Custom only: VEC2X'
         type: string
@@ -32,7 +32,7 @@ on:
       custom_backoff:
         description: 'Custom only: BACKOFF'
         type: string
-        default: '500'
+        default: '2000'
       custom_basen:
         description: 'Custom only: BASEN (0 or a multiple of 32)'
         type: string
@@ -71,9 +71,18 @@ jobs:
           "$RUNNER_TEMP/test_hit_epoch"
           cc -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/test_scan_pipeline" tests/test_scan_pipeline.c -lpthread
           "$RUNNER_TEMP/test_scan_pipeline"
+      - name: Test per-thread ACL context binding (mock runtime)
+        run: |
+          set -euo pipefail
+          c++ -O2 -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Itests/stubs -o "$RUNNER_TEMP/test_host_context" tests/test_host_context.cpp
+          "$RUNNER_TEMP/test_host_context"
       - name: Makefile passes optimization macros to CMake (dry run)
         run: |
           set -euo pipefail
+          make -n kernel > "$RUNNER_TEMP/make-defaults.txt"
+          for token in -DMBATCH=8 -DBUFS=4 -DVEC2X=2 -DBACKOFF=2000 -DHIT_EPOCH=1; do
+            grep -F -- "$token" "$RUNNER_TEMP/make-defaults.txt"
+          done
           make -n kernel RANK=128 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1 > "$RUNNER_TEMP/make-kernel.txt"
           for token in -DMBATCH=8 -DBUFS=2 -DVEC2X=2 -DBACKOFF=500 -DBASEN=128 -DHIT_EPOCH=1; do
             grep -F -- "$token" "$RUNNER_TEMP/make-kernel.txt"

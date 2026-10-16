@@ -1,4 +1,7 @@
 """Pure-host tests for safe GitHub Actions profile selection."""
+import json
+import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -8,6 +11,27 @@ from ci_profiles import make_matrix  # noqa: E402
 
 
 class TestBuildProfiles(unittest.TestCase):
+    def test_cli_defaults(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "ci_profiles.py"
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("INPUT_") and k != "GITHUB_OUTPUT"}
+        for profile in (None, "custom"):
+            with self.subTest(profile=profile):
+                if profile:
+                    env["INPUT_PROFILE"] = profile
+                output = subprocess.check_output([sys.executable, str(script)], env=env, text=True)
+                cfg = json.loads(output)["include"][0]
+                self.assertEqual(cfg["id"], profile or "mbatch8")
+                self.assertEqual(
+                    (cfg["bufs"], cfg["vec2x"], cfg["backoff"], cfg["mbatch"], cfg["hit_epoch"]),
+                    (4, 2, 2000, 8, 1))
+
+    def test_matched_epoch_comparison(self):
+        legacy = make_matrix("mbatch8_legacy")["include"][0]
+        epoch = make_matrix("mbatch8")["include"][0]
+        self.assertEqual({k: v for k, v in legacy.items() if k not in ("id", "hit_epoch")},
+                         {k: v for k, v in epoch.items() if k not in ("id", "hit_epoch")})
+
     def test_baseline(self):
         cfg = make_matrix("baseline")["include"][0]
         self.assertEqual((cfg["rank"], cfg["mbatch"], cfg["hit_epoch"]), (128, 1, 0))

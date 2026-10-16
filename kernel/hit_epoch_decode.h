@@ -5,14 +5,14 @@
 #include "hit_epoch_layout.h"
 
 static inline int pearl_decode_hit_epoch(const uint32_t* records, size_t worker_count,
-                                         uint64_t epoch, int strip, int mbatch,
+                                         uint64_t epoch, int strip,
                                          int nbands, int n_hi,
                                          int* hit_strip, int* hit_tile) {
     if (!records || !epoch || !hit_strip || !hit_tile || strip < 0 ||
-        mbatch < 1 || nbands < 1 || n_hi < 1) return 0;
+        nbands < 1 || n_hi < 1) return 0;
     const uint64_t tiles = (uint64_t)(unsigned)nbands * (unsigned)n_hi;
-    const uint64_t lo = (uint64_t)(unsigned)strip * (unsigned)mbatch;
-    const uint64_t hi = lo + (unsigned)mbatch;
+    const uint64_t lo = (uint64_t)(unsigned)strip;
+    const uint64_t hi = lo + 1;
     uint64_t best = UINT64_MAX;
     for (size_t i = 0; i < worker_count; i++) {
         const uint32_t* r = records + i * PEARL_HIT_STRIDE_WORDS;

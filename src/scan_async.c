@@ -1,4 +1,4 @@
-/* Submit super-strips to the NPU; the vector kernel hashes and checks tile hits. */
+/* Submit strips to the NPU; the vector kernel hashes and checks tile hits. */
 #include <stdint.h>
 #include <string.h>
 #include <pthread.h>
@@ -16,7 +16,6 @@
 
 extern void pearl_strip_submit_fast(const int8_t *a);
 extern void pearl_strip_wait_done(void);
-extern int pearl_mbatch(void);
 extern void pearl_set_key_target(const uint32_t *key, const uint32_t *target);
 extern void pearl_set_nhi(int n_hi);
 extern int pearl_get_hit_result(int *hit_strip, int *hit_tile);
@@ -24,7 +23,7 @@ extern int pearl_get_hit_result(int *hit_strip, int *hit_tile);
 static struct {
     pthread_mutex_t mu;
     int started;
-    const uint8_t *key; const uint32_t *target; int nbands, n_hi, G;
+    const uint8_t *key; const uint32_t *target; int nbands, n_hi;
     volatile int hit_found; int hit_strip, hit_tile;
 } A = { .mu = PTHREAD_MUTEX_INITIALIZER };
 
@@ -35,13 +34,9 @@ int scan_full(const int8_t *a_noised, int num_strips,
     (void)scratch;
     (void)pow_threads;
 
-    int G = pearl_mbatch();
-    if (G < 1) G = 1;
-    int n_super = num_strips / G;
-
     pthread_mutex_lock(&A.mu);
     if (!A.started) A.started = 1;
-    A.key = key; A.target = target; A.nbands = nbands; A.n_hi = n_hi; A.G = G;
+    A.key = key; A.target = target; A.nbands = nbands; A.n_hi = n_hi;
     A.hit_found = 0; A.hit_strip = A.hit_tile = -1;
     pthread_mutex_unlock(&A.mu);
 
@@ -50,14 +45,14 @@ int scan_full(const int8_t *a_noised, int num_strips,
     pearl_set_key_target(key_u32, target);
     pearl_set_nhi(n_hi);
 
-    // Prime the pipeline, then submit the next super-strip before waiting on
+    // Prime the pipeline, then submit the next strip before waiting on
     // the oldest one. The underlying kernel owns two in-flight buffer slots.
-    if (n_super <= 0) return 0;
+    if (num_strips <= 0) return 0;
     pearl_strip_submit_fast(a_noised);
     int submitted = 1, completed = 0;
-    for (int ss = 0; ss < n_super; ss++) {
-        if (ss + 1 < n_super) {
-            pearl_strip_submit_fast(a_noised + (size_t)(ss + 1) * G * R * K);
+    for (int ss = 0; ss < num_strips; ss++) {
+        if (ss + 1 < num_strips) {
+            pearl_strip_submit_fast(a_noised + (size_t)(ss + 1) * R * K);
             ++submitted;
         }
 
@@ -76,7 +71,7 @@ int scan_full(const int8_t *a_noised, int num_strips,
             break;
         }
     }
-    // A hit may arrive while the next super-strip is already in flight.
+    // A hit may arrive while the next strip is already in flight.
     // Drain it before pearl_use_b() resets shared producer/consumer flags.
     while (completed < submitted) {
         pearl_strip_wait_done();

@@ -21,42 +21,41 @@ class TestBuildProfiles(unittest.TestCase):
                     env["INPUT_PROFILE"] = profile
                 output = subprocess.check_output([sys.executable, str(script)], env=env, text=True)
                 cfg = json.loads(output)["include"][0]
-                self.assertEqual(cfg["id"], profile or "mbatch1")
+                self.assertEqual(cfg["id"], profile or "default")
                 self.assertEqual(
-                    (cfg["bufs"], cfg["vec2x"], cfg["backoff"], cfg["mbatch"], cfg["hit_epoch"]),
-                    (4, 2, 500, 1, 1))
+                    (cfg["bufs"], cfg["vec2x"], cfg["backoff"], cfg["hit_epoch"]),
+                    (4, 2, 500, 1))
 
     def test_matched_epoch_comparison(self):
-        legacy = make_matrix("mbatch8_legacy")["include"][0]
-        epoch = make_matrix("mbatch8")["include"][0]
+        legacy = make_matrix("legacy")["include"][0]
+        epoch = make_matrix("epoch")["include"][0]
         self.assertEqual({k: v for k, v in legacy.items() if k not in ("id", "hit_epoch")},
                          {k: v for k, v in epoch.items() if k not in ("id", "hit_epoch")})
 
     def test_baseline(self):
         cfg = make_matrix("baseline")["include"][0]
-        self.assertEqual((cfg["rank"], cfg["mbatch"], cfg["hit_epoch"]), (128, 1, 0))
+        self.assertEqual((cfg["rank"], cfg["hit_epoch"]), (128, 0))
 
     def test_experiments(self):
         cfgs = make_matrix("matrix")["include"]
-        self.assertEqual([p["id"] for p in cfgs], ["baseline", "mbatch8_legacy", "mbatch8"])
-        self.assertEqual([p["mbatch"] for p in cfgs], [1, 8, 8])
+        self.assertEqual([p["id"] for p in cfgs], ["baseline", "legacy", "epoch"])
         self.assertEqual([p["hit_epoch"] for p in cfgs], [0, 0, 1])
 
     def test_custom(self):
-        p = make_matrix("custom", dict(mbatch="4", bufs="4", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
-        self.assertEqual(p["include"][0]["mbatch"], 4)
+        p = make_matrix("custom", dict(bufs="4", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
+        self.assertEqual(p["include"][0]["bufs"], 4)
 
     def test_reject_incompatible_flags(self):
         with self.assertRaises(ValueError):
-            make_matrix("custom", dict(mbatch="8", bufs="3", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
+            make_matrix("custom", dict(bufs="3", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
 
     def test_reject_invalid_mtile(self):
         with self.assertRaises(ValueError):
-            make_matrix("custom", dict(mbatch="1", bufs="2", vec2x="2", backoff="500", basen="256", hit_epoch="1"))
+            make_matrix("custom", dict(bufs="2", vec2x="2", backoff="500", basen="256", hit_epoch="1"))
 
     def test_reject_shell_injection(self):
         with self.assertRaises(ValueError):
-            make_matrix("custom", dict(mbatch="8; rm -rf /", bufs="2", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
+            make_matrix("custom", dict(bufs="2; rm -rf /", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
 
     def test_reject_bad_name(self):
         with self.assertRaises(ValueError):

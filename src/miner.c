@@ -15,7 +15,6 @@
 #define R 128
 
 extern int pearl_init(int dev, int nbands);
-extern int pearl_mbatch(void);
 extern void pearl_set_b(const int8_t *b, int n);
 extern void pearl_set_b_slot(const int8_t *b, int n, int slot) __attribute__((weak));
 extern void pearl_use_b(int slot) __attribute__((weak));
@@ -238,7 +237,7 @@ int main(int argc, char **argv) {
     while (do_handshake(host, port, addr, worker, pass)) { puts("[!] handshake failed, retry 10s"); sleep(10); }
 
     long M = mp.m, N = mp.n, Kc = mp.k;
-    printf("[config] M=%ld N=%ld K=%ld MBATCH=%d\n", M, N, Kc, pearl_mbatch());
+    printf("[config] M=%ld N=%ld K=%ld\n", M, N, Kc);
     int nbands = (int)(N / 64), nstrips = (int)(M / R);
     int tile_h = (int)mp.nrows, n_hi = R / tile_h, ht_per_block = 64 / tile_h;
     if (pearl_init(dev, nbands)) { puts("pearl_init failed"); return 2; }
@@ -376,8 +375,8 @@ int main(int argc, char **argv) {
             const double scan_s = (sb.tv_sec - sa.tv_sec) + (sb.tv_nsec - sa.tv_nsec) / 1e9;
             const double scans_per_s = iter / (elapsed > 0 ? elapsed : 1);
             const double estimated_ths = (double)M * N * Kc * scans_per_s / 1e12;
-            printf("[stats] Iteration: %ld | Scan: %.3fs%s | Scan rate: %.3f/s | Estimated hashrate: %.2f TH/s | MBATCH=%d\n",
-                   iter, scan_s, rc ? " HIT" : "", scans_per_s, estimated_ths, pearl_mbatch());
+            printf("[stats] Iteration: %ld | Scan: %.3fs%s | Scan rate: %.3f/s | Estimated hashrate: %.2f TH/s\n",
+                   iter, scan_s, rc ? " HIT" : "", scans_per_s, estimated_ths);
             printf("[shares] Submitted: %ld | Accepted: %ld | Rejected: %ld\n",
                    shares_sub, shares_acc, shares_rej);
             last_log_elapsed = elapsed;

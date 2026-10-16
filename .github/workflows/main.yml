@@ -10,18 +10,14 @@ on:
         description: 'Kernel build profile (matrix builds legacy vs epoch A/B)'
         type: choice
         required: true
-        default: mbatch1
+        default: default
         options:
-          - mbatch1
+          - default
           - baseline
-          - mbatch8
-          - mbatch8_legacy
+          - epoch
+          - legacy
           - matrix
           - custom
-      custom_mbatch:
-        description: 'Custom only: MBATCH (1-8)'
-        type: string
-        default: '1'
       custom_bufs:
         description: 'Custom only: BUFS (multiple of VEC2X)'
         type: string
@@ -81,11 +77,11 @@ jobs:
         run: |
           set -euo pipefail
           make -n kernel > "$RUNNER_TEMP/make-defaults.txt"
-          for token in -DMBATCH=1 -DBUFS=4 -DVEC2X=2 -DBACKOFF=500 -DHIT_EPOCH=1; do
+          for token in -DBUFS=4 -DVEC2X=2 -DBACKOFF=500 -DHIT_EPOCH=1; do
             grep -F -- "$token" "$RUNNER_TEMP/make-defaults.txt"
           done
-          make -n kernel RANK=128 MBATCH=8 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1 > "$RUNNER_TEMP/make-kernel.txt"
-          for token in -DMBATCH=8 -DBUFS=2 -DVEC2X=2 -DBACKOFF=500 -DBASEN=128 -DHIT_EPOCH=1; do
+          make -n kernel RANK=128 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1 > "$RUNNER_TEMP/make-kernel.txt"
+          for token in -DBUFS=2 -DVEC2X=2 -DBACKOFF=500 -DBASEN=128 -DHIT_EPOCH=1; do
             grep -F -- "$token" "$RUNNER_TEMP/make-kernel.txt"
           done
       - name: Explain validation boundary
@@ -104,7 +100,6 @@ jobs:
         id: matrix
         env:
           INPUT_PROFILE: ${{ inputs.profile }}
-          INPUT_CUSTOM_MBATCH: ${{ inputs.custom_mbatch }}
           INPUT_CUSTOM_BUFS: ${{ inputs.custom_bufs }}
           INPUT_CUSTOM_VEC2X: ${{ inputs.custom_vec2x }}
           INPUT_CUSTOM_BACKOFF: ${{ inputs.custom_backoff }}
@@ -113,7 +108,7 @@ jobs:
         run: python3 scripts/ci_profiles.py
 
   build-arm64:
-    name: CANN9 ARM64 - ${{ matrix.id }} (MBATCH=${{ matrix.mbatch }}, HIT_EPOCH=${{ matrix.hit_epoch }})
+    name: CANN9 ARM64 - ${{ matrix.id }} (HIT_EPOCH=${{ matrix.hit_epoch }})
     needs: plan-build
     if: github.event_name == 'workflow_dispatch'
     # Repository variable may select a self-hosted ARM64 runner with enough disk.
@@ -124,7 +119,6 @@ jobs:
       max-parallel: 2
       matrix: ${{ fromJSON(needs.plan-build.outputs.matrix) }}
     env:
-      CI_MBATCH: ${{ matrix.mbatch }}
       CI_BUFS: ${{ matrix.bufs }}
       CI_VEC2X: ${{ matrix.vec2x }}
       CI_BACKOFF: ${{ matrix.backoff }}
@@ -179,7 +173,7 @@ jobs:
           set -euo pipefail
           sudo -H env \
             GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CI_BLK="$CI_BLK" \
-            CI_MBATCH="$CI_MBATCH" CI_BUFS="$CI_BUFS" CI_VEC2X="$CI_VEC2X" \
+            CI_BUFS="$CI_BUFS" CI_VEC2X="$CI_VEC2X" \
             CI_BACKOFF="$CI_BACKOFF" CI_BASEN="$CI_BASEN" CI_HIT_EPOCH="$CI_HIT_EPOCH" \
             bash scripts/ci_build.sh
       - name: Package separate, labeled experimental binaries
@@ -197,7 +191,7 @@ jobs:
           basename = f'ascend_prl_910b_{os.environ["PROFILE_NAME"]}_{os.environ["GITHUB_RUN_NUMBER"]}_{os.environ["GITHUB_RUN_ATTEMPT"]}'
           manifest = {
               "profile": os.environ["PROFILE_NAME"], "rank": 128,
-              **{key.lower(): int(os.environ[f'CI_{key}']) for key in ("MBATCH", "BUFS", "VEC2X", "BACKOFF", "BASEN", "HIT_EPOCH")},
+              **{key.lower(): int(os.environ[f'CI_{key}']) for key in ("BUFS", "VEC2X", "BACKOFF", "BASEN", "HIT_EPOCH")},
               "github_sha": os.environ["GITHUB_SHA"], "github_run_id": os.environ["GITHUB_RUN_ID"],
               "runtime_npu_verification": "NOT_RUN", "benchmark_ths": None,
               "notes": "Compilation on ARM64 is not a proof-correctness or throughput test. HIT_EPOCH=1 is an unverified runtime change.",

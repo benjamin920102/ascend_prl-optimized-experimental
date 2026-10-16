@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 
 PRESETS = {
-    "mbatch1": {"mbatch": 1, "bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 1},
-    "baseline": {"mbatch": 1, "bufs": 4, "vec2x": 2, "backoff": 500, "basen": 0, "hit_epoch": 0},
-    "mbatch8_legacy": {"mbatch": 8, "bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 0},
-    "mbatch8": {"mbatch": 8, "bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 1},
+    "default": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 1},
+    "baseline": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 0, "hit_epoch": 0},
+    "legacy": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 0},
+    "epoch": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 1},
 }
 
 
@@ -28,7 +28,6 @@ def _integer(value, name, minimum, maximum):
 
 def validated(configuration):
     p = {
-        "mbatch": _integer(configuration["mbatch"], "MBATCH", 1, 8),
         "bufs": _integer(configuration["bufs"], "BUFS", 1, 16),
         "vec2x": _integer(configuration["vec2x"], "VEC2X", 1, 4),
         "backoff": _integer(configuration["backoff"], "BACKOFF", 0, 100000),
@@ -37,14 +36,14 @@ def validated(configuration):
     }
     if p["bufs"] < p["vec2x"] or p["bufs"] % p["vec2x"]:
         raise ValueError("BUFS must be >= VEC2X and divisible by VEC2X")
-    if p["basen"] and (p["basen"] % 32 or p["basen"] > 128 * p["mbatch"]):
-        raise ValueError("BASEN must be 0 or a 32-aligned width <= 128*MBATCH")
+    if p["basen"] and (p["basen"] % 32 or p["basen"] > 128):
+        raise ValueError("BASEN must be 0 or a 32-aligned width <= 128")
     return p
 
 
 def make_matrix(profile, custom=None):
     if profile == "matrix":
-        names = ("baseline", "mbatch8_legacy", "mbatch8")
+        names = ("baseline", "legacy", "epoch")
         configs = [(name, dict(PRESETS[name])) for name in names]
     elif profile == "custom":
         if custom is None:
@@ -59,7 +58,6 @@ def make_matrix(profile, custom=None):
 
 def main():
     custom = {
-        "mbatch": os.getenv("INPUT_CUSTOM_MBATCH", "1"),
         "bufs": os.getenv("INPUT_CUSTOM_BUFS", "4"),
         "vec2x": os.getenv("INPUT_CUSTOM_VEC2X", "2"),
         "backoff": os.getenv("INPUT_CUSTOM_BACKOFF", "500"),
@@ -70,7 +68,7 @@ def main():
     if custom["hit_epoch"] not in ("true", "false"):
         raise ValueError("INPUT_CUSTOM_HIT_EPOCH must be true or false")
     custom["hit_epoch"] = "1" if custom["hit_epoch"] == "true" else "0"
-    plan = make_matrix(os.getenv("INPUT_PROFILE", "mbatch1"), custom)
+    plan = make_matrix(os.getenv("INPUT_PROFILE", "default"), custom)
     value = json.dumps(plan, separators=(",", ":"))
     print(json.dumps(plan, indent=2))
     out = os.getenv("GITHUB_OUTPUT")

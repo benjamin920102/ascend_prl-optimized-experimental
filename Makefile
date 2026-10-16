@@ -33,7 +33,6 @@ CC   := gcc
 # BLAKE3_USE_TBB uses the pthread split hook in blake3_join.c (not oneTBB).
 CFLAGS := -O3 -fopenmp -march=armv8-a+crypto -DBLAKE3_USE_NEON=1 -DBLAKE3_USE_TBB -DK=$(K) -DRANK=$(RANK) -DMDIM=$(MDIM) -I$(BLK)
 RPATH  := -Wl,-rpath,'$$ORIGIN'
-MBATCH ?= 1
 BUFS ?= 4
 VEC2X ?= 2
 BACKOFF ?= 500
@@ -57,7 +56,7 @@ $(OUT):
 	mkdir -p $(OUT)
 
 # Link exactly one frontend per binary; build-time rank/shape is encoded in the proof.
-ENGINE_SRC := src/miner.c src/proofgz.c src/pools/stratum.c src/prep.c src/scan_mbatch_async.c src/blake3_join.c $(BLK_SRC)
+ENGINE_SRC := src/miner.c src/proofgz.c src/pools/stratum.c src/prep.c src/scan_async.c src/blake3_join.c $(BLK_SRC)
 # Use libz's soname: some runtime images lack the libz.so development symlink.
 LINK := -L$(OUT) -lpearl_hlc2 -lpearl_proof -lpthread -l:libz.so.1 $(RPATH)
 miner: $(OUT)
@@ -73,7 +72,7 @@ guard: $(OUT)
 kernel: $(OUT)
 	cd kernel && rm -rf build && mkdir build && cd build && \
 	  cmake -DCMAKE_ASC_RUN_MODE=npu -DCMAKE_ASC_ARCHITECTURES=dav-2201 \
-	        -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=$(BUFS) -DVEC2X=$(VEC2X) -DMBATCH=$(MBATCH) \
+	        -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=$(BUFS) -DVEC2X=$(VEC2X) \
 	        -DBACKOFF=$(BACKOFF) -DBASEN=$(BASEN) -DKERNEL_K=$(K) -DHIT_EPOCH=$(HIT_EPOCH) \
 	        -DCMAKE_MODULE_PATH="$$ASC_MODULES" .. && make -j
 	cp kernel/build/libpearl_hlc2.so $(OUT)/

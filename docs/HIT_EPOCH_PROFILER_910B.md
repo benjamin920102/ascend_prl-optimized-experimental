@@ -19,9 +19,9 @@ Use the **same** rank and tiling for a fair epoch-vs-legacy comparison. Keep bui
 
 ```bash
 # Legacy control (all else identical)
-make RANK=128 BUFS=4 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=0 all
+make RANK=128 BUFS=4 VEC2X=2 BACKOFF=100 BASEN=128 HIT_EPOCH=0 all
 # Optimized
-make RANK=128 BUFS=4 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1 all
+make RANK=128 BUFS=4 VEC2X=2 BACKOFF=100 BASEN=128 HIT_EPOCH=1 all
 ```
 
 Build outputs have the same names and must not be mixed. CI has profiles `legacy` and `epoch` that package them separately. Confirm process startup prints `HIT_EPOCH=1` for the new build.

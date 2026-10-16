@@ -8,7 +8,7 @@ RANK=128 requires NINNER=1, NFOLD=32 and K=4096. Every prefix sum participates i
 
 ## Current defaults
 
-BUFS=4, VEC2X=2, BACKOFF=500, HIT_EPOCH=1. The 20 Cube producers have 40 Vector consumer blocks. Each vector block keeps one 4 KiB transcript in UB and releases its producer slot before scalar hashing.
+BUFS=4, VEC2X=2, BACKOFF=100, HIT_EPOCH=1. The 20 Cube producers have 40 Vector consumer blocks. Each vector block keeps one 4 KiB transcript in UB and releases its producer slot before scalar hashing.
 
 Per band and strip, 32 folds write 1 MiB of partials and read 1 MiB back. The partial ring at BUFS=4 occupies 80 MiB. BUFS=2 halves storage but can increase producer back-pressure.
 

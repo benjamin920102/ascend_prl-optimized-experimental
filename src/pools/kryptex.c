@@ -1,4 +1,6 @@
-/* Kryptex object-protocol frontend; v2 authorization negotiates gzip proofs. */
+/* Kryptex object-protocol frontend; v2 authorization negotiates gzip proofs.
+ * Aligned with current Kryptex / pearl-stratum object dialect (2026-10).
+ */
 #include "pool.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +13,7 @@
 #define RANK 128
 #endif
 #ifndef MDIM
-#define MDIM 131072
+#define MDIM 16384
 #endif
 
 static void k_init_params(mining_params_t *mp) {
@@ -26,17 +28,24 @@ static void k_init_params(mining_params_t *mp) {
 static int k_open(pool_conn_t *c, const char *host, int port,
                   const char *addr, const char *worker, const char *pass, mining_params_t *mp) {
     c->gzip = 0;
-    if (pool_connect(c, host, port)) return -1;
+    if (pool_connect(c, host, port)) {
+        fprintf(stderr, "[stratum] kryptex: TCP connect to %s:%d failed\n", host, port);
+        return -1;
+    }
     char line[LINE];
-    snprintf(line, LINE, "{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[\"cminer/0.1\"]}");
+    /* subscribe is optional on pure object-dialect pools but kept for compatibility */
+    snprintf(line, LINE, "{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[\"ascend_prl/0.2\"]}");
     pool_send_line(c, line);
-    const char *pw = (pass && *pass) ? pass : "";
+
+    const char *pw = (pass && *pass) ? pass : "x";
     if (getenv("PRL_NOGZIP")) {
+        /* classic positional-style authorize (still accepted by Kryptex) */
         snprintf(line, LINE, "{\"id\":3,\"method\":\"mining.authorize\",\"params\":[\"%s.%s\",\"%s\"]}",
-                 addr, worker, pw[0] ? pw : "x");
+                 addr, worker, pw);
     } else {
+        /* object + type:v2  — matches current Kryptex gzip protocol */
         snprintf(line, LINE, "{\"id\":3,\"method\":\"mining.authorize\",\"params\":"
-                 "{\"wallet\":\"%s.%s\",\"agent\":\"cminer/0.1\",\"password\":\"%s\",\"type\":\"v2\"}}",
+                 "{\"wallet\":\"%s.%s\",\"agent\":\"ascend_prl/0.2\",\"password\":\"%s\",\"type\":\"v2\"}}",
                  addr, worker, pw);
     }
     pool_send_line(c, line);
@@ -56,7 +65,6 @@ static void k_handle_notify(pool_conn_t *c, const char *line) {
         memset(ptarget, 0, 32);
         int tn = hex2bin(tgt, ptarget, 32);
         if (tn > 0) {
-            // Pool targets may omit leading zero bytes.
             if (tn < 32) {
                 memmove(ptarget + (32 - tn), ptarget, tn);
                 memset(ptarget, 0, 32 - tn);
@@ -96,6 +104,11 @@ static void k_dispatch(pool_conn_t *c, const char *line, mining_params_t *mp) {
             if (!c->gzip) printf("[stratum]%s gzip proof negotiated (type:v2)\n", c->tag);
             c->gzip = 1;
         }
+        /* surface authorize / subscribe failures immediately */
+        const char *e = jfind(line, "error");
+        if (e && strncmp(e, "null", 4) != 0 && *e != '}' && *e != ',') {
+            fprintf(stderr, "[stratum]%s authorize/subscribe error: %.300s\n", c->tag, line);
+        }
         pool_handle_result(c, line);
     }
 }
@@ -107,7 +120,6 @@ static void k_build_target(const job_t *J, int tile_h, long rounded_k, uint32_t 
 static int k_submit_prefix(pool_conn_t *c, const char *addr, const char *worker,
                            const char *job_id, char *msg, size_t cap, const char **tail) {
     *tail = "\"}}";
-    // Only a negotiated gzip session may override the proof field name.
     const char *field = "plain_proof";
     if (c->gzip) { const char *e = getenv("PRL_GZIP_FIELD"); if (e && *e) field = e; }
     return snprintf(msg, cap, "{\"id\":%d,\"method\":\"mining.submit\",\"params\":"

@@ -60,6 +60,8 @@ static int do_handshake(const char *host, int port, const char *addr,
         usleep(100000);
     }
     if (!(user_conn.job.have && mp.have)) {
+        fprintf(stderr, "[!] handshake timeout: job.have=%d mp.have=%d (no mining.notify received)\n",
+                user_conn.job.have, mp.have);
         user_conn.dead = 1;
         if (user_conn.fd >= 0) close(user_conn.fd);
         return -1;

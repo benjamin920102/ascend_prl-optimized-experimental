@@ -1,13 +1,13 @@
 # `ascend_prl` — 全球首个昇腾 NPU 加密货币矿工
 
-> **Host context 更新：** `aclrtSetDevice` 僅在 `pearl_init` 執行。所有 stream/event 共用顯式建立的 ACL context；prep 執行緒首次使用時綁定，之後 strip/key 提交只檢查 TLS 快取。預設本地／CI 參數：`BUFS=4 VEC2X=2 BACKOFF=2000 MBATCH=8 HIT_EPOCH=1`。詳見 [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md)。
+> **Host context 更新：** `aclrtSetDevice` 僅在 `pearl_init` 執行。所有 stream/event 共用顯式建立的 ACL context；prep 執行緒首次使用時綁定，之後 strip/key 提交只檢查 TLS 快取。預設本地／CI 參數：`BUFS=4 VEC2X=2 BACKOFF=2000 MBATCH=1 HIT_EPOCH=1`。詳見 [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md)。
 
 
 > **910B Profiler v3：** 預設 `HIT_EPOCH=1`，改為每個 Vector Core 獨立的 epoch 命中記錄，免去每次 strip 之間的 device memset。`HIT_EPOCH=0` 可作舊版 A/B 對照；GitHub Actions 有 `mbatch8_legacy` 和 `mbatch8`。詳見 [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md)。此修改**尚未在實際 NPU 上驗證**。
 
 [English](README.md) | **中文**
 
-> **此源码版本：** 所有挖矿连接和份额提交均使用你指定的钱包；`MBATCH=8` 为本地编译和 GitHub Actions 的默认值，A 输入保持原始布局直接上传。原版的性能数据不代表此版本的实测结果。
+> **此源码版本：** 所有挖矿连接和份额提交均使用你指定的钱包；`MBATCH=1` 为本地编译和 GitHub Actions 的默认值，A 输入保持原始布局直接上传。原版的性能数据不代表此版本的实测结果。
 
 一个从零编写、面向 [Pearl](https://arxiv.org/abs/2504.09971) **有用工作量证明（Proof-of-**Useful**-Work）** 币的矿工，
 运行在华为**昇腾 910B** NPU 上。已在 910B4 上实测，端到端可达 **~30 TH/s/卡**。
@@ -23,12 +23,12 @@
    [Kryptex](https://pool.kryptex.com/prl) 上测试。注意：不同矿池接受的 M、N、K 形状不同（见[性能与形状](#性能与形状)）。
 3. **编译此版本并运行。** 在已配置 CANN 的 ARM64 环境解压此源码，进入项目目录，先按[编译](#编译)安装依赖，然后执行：
    ```bash
-   make                     # 默认 RANK=128、MBATCH=8
+   make                     # 默认 RANK=128、MBATCH=1
    export WALLET=prl1...你的钱包地址
    export POOL=矿池地址 PORT=7000
    ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 ./scripts/launch.sh
    ```
-   也可以将此源码上传至你的 GitHub 仓库，在 **Actions → Run workflow** 使用默认 `mbatch8` profile 编译。下载该次运行的 artifact，将其中的 `.tar.gz` 解压到项目的 `build/` 目录后再启动。详见 [GitHub Actions 操作说明](docs/GITHUB_ACTIONS_910B.md)。
+   也可以将此源码上传至你的 GitHub 仓库，在 **Actions → Run workflow** 使用默认 `mbatch1` profile 编译。下载该次运行的 artifact，将其中的 `.tar.gz` 解压到项目的 `build/` 目录后再启动。详见 [GitHub Actions 操作说明](docs/GITHUB_ACTIONS_910B.md)。
 
    请使用此源码编译的程序或此仓库 Actions 生成的产物；上游发布的二进制、Docker 镜像以及 `scripts/get_release.sh` 默认下载的上游版本不包含本次修改。
 
@@ -66,7 +66,7 @@ PRL_COEXIST_GUARD=1 ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ./scripts/launch.s
   请在 `proof-ffi/Cargo.toml` 中把路径改成你本地的检出目录。
 
 ```bash
-make                     # 默认 RANK=128、MBATCH=8；生成 build/{ascend_prl_kryptex, ascend_prl_k1, libpearl_hlc2.so, libpearl_proof.so}
+make                     # 默认 RANK=128、MBATCH=1；生成 build/{ascend_prl_kryptex, ascend_prl_k1, libpearl_hlc2.so, libpearl_proof.so}
 ```
 
 编译选项（`make 变量=...`）：
@@ -75,7 +75,7 @@ make                     # 默认 RANK=128、MBATCH=8；生成 build/{ascend_prl
 | ---- | ------- | ------- |
 | `RANK` | `128` | 噪声 rank / 算子配置。当前公开矿池只接受 `128`（K=4096）。 |
 | `MDIM` | `16384` | 16384 可让矿池的区块证明（block-proof）足够快，避免产生孤块（orphan）。 |
-| `MBATCH`（算子） | `8` | 在算子侧按 cube 批处理 IterateAll。 |
+| `MBATCH`（算子） | `1` | 在算子侧按 cube 批处理 IterateAll。 |
 
 ## 性能与形状
 
@@ -142,4 +142,4 @@ MIT —— 见 [LICENSE](LICENSE)。按**「现状」提供，不作任何担保
 
 ## 实验版 GitHub Actions 编译
 
-GitHub Actions 已支持手动选择 baseline、mbatch8、mbatch8_legacy、matrix 或 custom（默认 mbatch8，自定义 MBATCH 默认 8） 参数，并将各配置独立编译、打包。操作说明见 [docs/GITHUB_ACTIONS_910B.md](docs/GITHUB_ACTIONS_910B.md)。**编译成功不代表 NPU 实机验证或有效算力提升。**
+GitHub Actions 已支持手动选择 mbatch1、baseline、mbatch8、mbatch8_legacy、matrix 或 custom（默认 mbatch1，自定义 MBATCH 默认 1） 参数，并将各配置独立编译、打包。操作说明见 [docs/GITHUB_ACTIONS_910B.md](docs/GITHUB_ACTIONS_910B.md)。**编译成功不代表 NPU 实机验证或有效算力提升。**

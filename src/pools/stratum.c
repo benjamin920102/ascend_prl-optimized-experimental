@@ -7,13 +7,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-long shares_sub = 0, shares_acc = 0, shares_rej = 0;
+_Atomic long shares_sub = 0, shares_acc = 0, shares_rej = 0;
 pthread_mutex_t job_mu = PTHREAD_MUTEX_INITIALIZER;
 
 void pool_conn_init(pool_conn_t *c, const char *tag) {
     c->fd = -1;
     c->dead = 1;
-    c->msg_id = 0;
+    c->msg_id = 100;
+    memset(c->pending, 0, sizeof c->pending);
     c->tag = tag;
     c->gzip = 0;
     c->job.have = 0;
@@ -27,6 +28,15 @@ void pool_send_line(pool_conn_t *c, const char *s) {
 
 void pool_send_line_n(pool_conn_t *c, const char *s, size_t len) {
     pthread_mutex_lock(&c->send_mu);
+    /* Register before sending: the reader can receive a reply immediately. */
+    int submit_id = 0;
+    if (strstr(s, "\"method\":\"mining.submit\"")) {
+        submit_id = (int)jnum(s, "id", 0);
+        if (submit_id > 100) {
+            c->pending[submit_id % 256] = submit_id;
+            shares_sub++;
+        }
+    }
     size_t off = 0;
     while (off < len) {
         ssize_t w = write(c->fd, s + off, len - off);
@@ -46,6 +56,7 @@ int pool_connect(pool_conn_t *c, const char *host, int port) {
     if (connect(c->fd, ai->ai_addr, ai->ai_addrlen)) { freeaddrinfo(ai); c->fd = -1; return -1; }
     freeaddrinfo(ai);
     int one = 1; setsockopt(c->fd, SOL_SOCKET, SO_KEEPALIVE, &one, 4);
+    memset(c->pending, 0, sizeof c->pending);
     c->dead = 0;
     return 0;
 }
@@ -86,17 +97,27 @@ void pool_start_reader(pool_conn_t *c, mining_params_t *mp) {
 }
 
 void pool_handle_result(pool_conn_t *c, const char *line) {
+    int id = (int)jnum(line, "id", 0);
     const char *e = jfind(line, "error");
+    const char *r = jfind(line, "result");
     int has_err = e && strncmp(e, "null", 4) != 0 && *e != '}' && *e != ',';
-    if (has_err) {
-        shares_rej++;
-        printf("[stratum]%s REJECTED: %s\n", c->tag, line);
+    int accepted = r && !strncmp(r, "true", 4);
+    int rejected = has_err || (r && !strncmp(r, "false", 5));
+    pthread_mutex_lock(&c->send_mu);
+    int matched = id > 100 && c->pending[id % 256] == id;
+    if (matched && (accepted || rejected)) c->pending[id % 256] = 0;
+    pthread_mutex_unlock(&c->send_mu);
+    if (!matched) {
+        if (has_err) fprintf(stderr, "[stratum]%s Request failed: %s\n", c->tag, line);
         return;
     }
-    const char *r = jfind(line, "result");
-    if (r && !strncmp(r, "true", 4)) {
+    if (rejected) {
+        shares_rej++;
+        printf("[stratum]%s Share rejected: %s\n", c->tag, line);
+    } else if (accepted) {
         shares_acc++;
-        printf("[stratum]%s ACCEPTED (%ld/%ld)\n", c->tag, shares_acc, shares_sub);
+        printf("[stratum]%s Share accepted | Submitted: %ld | Accepted: %ld | Rejected: %ld\n",
+               c->tag, shares_sub, shares_acc, shares_rej);
     }
 }
 

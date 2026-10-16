@@ -2,6 +2,7 @@
 #ifndef PEARL_POOL_H
 #define PEARL_POOL_H
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -33,6 +34,7 @@ typedef struct {
     pthread_mutex_t send_mu;
     volatile int dead;
     int msg_id;
+    int pending[256]; /* Outstanding submit IDs, guarded by send_mu. */
     job_t job;
     const char *tag;
     int gzip;           /* Kryptex v2 uses gzip-compressed proofs. */
@@ -52,7 +54,7 @@ typedef struct {
 
 extern const pool_frontend_t POOL;
 
-extern long shares_sub, shares_acc, shares_rej;
+extern _Atomic long shares_sub, shares_acc, shares_rej;
 extern pthread_mutex_t job_mu;
 
 void pool_conn_init(pool_conn_t *c, const char *tag);

@@ -1,13 +1,13 @@
 # `ascend_prl` — the world's first Ascend NPU cryptocurrency miner
 
-> **Host context update:** `aclrtSetDevice` runs only in `pearl_init`. One explicit ACL context owns all streams/events; prep threads bind it once, and repeated strip/key submissions use a TLS cache without runtime context calls. Default local/CI settings: `BUFS=4 VEC2X=2 BACKOFF=2000 MBATCH=8 HIT_EPOCH=1`. See [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md).
+> **Host context update:** `aclrtSetDevice` runs only in `pearl_init`. One explicit ACL context owns all streams/events; prep threads bind it once, and repeated strip/key submissions use a TLS cache without runtime context calls. Default local/CI settings: `BUFS=4 VEC2X=2 BACKOFF=2000 MBATCH=1 HIT_EPOCH=1`. See [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md).
 
 
 > **910B profiler v3:** `HIT_EPOCH=1` is now the default: per-Vector-core epoch hit records replace per-strip device memset. `HIT_EPOCH=0` retains the original protocol for matched A/B testing. GitHub Actions includes `mbatch8_legacy` and `mbatch8`; see [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md). The new protocol is **not yet NPU-verified**.
 
 **English** | [中文](README_zh.md)
 
-> **This source version:** All mining connections and share submissions use your configured wallet. `MBATCH=8` is the default for local builds and GitHub Actions, and A inputs upload directly in their natural layout. Upstream performance figures are not measurements of this version.
+> **This source version:** All mining connections and share submissions use your configured wallet. `MBATCH=1` is the default for local builds and GitHub Actions, and A inputs upload directly in their natural layout. Upstream performance figures are not measurements of this version.
 
 A from-scratch miner for the [Pearl](https://arxiv.org/abs/2504.09971) Proof-of-**Useful**-Work
 coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~30 TH/s/device end-to-end**.
@@ -23,12 +23,12 @@ coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~30 TH/s/devic
    [Kryptex](https://pool.kryptex.com/prl). Note: different pools accept proofs for different M, N, K (see [Performance](#performance-and-shapes)).
 3. **Build and run this version.** Extract this source on an ARM64 machine with CANN configured, enter the project directory, and install the [build dependencies](#build):
    ```bash
-   make                     # defaults: RANK=128, MBATCH=8
+   make                     # defaults: RANK=128, MBATCH=1
    export WALLET=prl1...your_wallet
    export POOL=pool.host PORT=7000
    ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 ./scripts/launch.sh
    ```
-   Alternatively, upload this source to your GitHub repository and run **Actions → Run workflow** with the default `mbatch8` profile. Download that run's artifact, extract its `.tar.gz` into the project's `build/` directory, then launch. See the [GitHub Actions instructions](docs/GITHUB_ACTIONS_910B.md).
+   Alternatively, upload this source to your GitHub repository and run **Actions → Run workflow** with the default `mbatch1` profile. Download that run's artifact, extract its `.tar.gz` into the project's `build/` directory, then launch. See the [GitHub Actions instructions](docs/GITHUB_ACTIONS_910B.md).
 
    Use binaries compiled from this source or produced by this repository's Actions run. Upstream binaries, Docker images, and the upstream release downloaded by default with `scripts/get_release.sh` do not contain these changes.
 
@@ -67,7 +67,7 @@ Requirements:
   `proof-ffi/Cargo.toml` to your checkout.
 
 ```bash
-make                     # defaults: RANK=128, MBATCH=8; builds build/{ascend_prl_kryptex, ascend_prl_k1, libpearl_hlc2.so, libpearl_proof.so}
+make                     # defaults: RANK=128, MBATCH=1; builds build/{ascend_prl_kryptex, ascend_prl_k1, libpearl_hlc2.so, libpearl_proof.so}
 ```
 
 Build flags (`make VAR=...`):
@@ -76,7 +76,7 @@ Build flags (`make VAR=...`):
 | ---- | ------- | ------- |
 | `RANK` | `128` | Noise rank / kernel config. Current public pools accept `128` (K=4096). |
 | `MDIM` | `16384` | 16384 keeps the pool's block-proof fast (non-orphaning). |
-| `MBATCH` (kernel) | `8` | Strips batched per cube IterateAll (kernel-side). |
+| `MBATCH` (kernel) | `1` | Strips batched per cube IterateAll (kernel-side). |
 
 ## Performance and shapes
 
@@ -141,4 +141,4 @@ MIT — see [LICENSE](LICENSE). Provided **as-is, without warranty**.
 
 ## Experimental CANN 9.0 GitHub Actions builds
 
-See [docs/GITHUB_ACTIONS_910B.md](docs/GITHUB_ACTIONS_910B.md) to run the ARM64 CI build with selectable baseline, mbatch8, mbatch8_legacy, matrix, or custom profiles (default: mbatch8; custom MBATCH also defaults to 8). A green compile does not verify NPU proof correctness or TH/s.
+See [docs/GITHUB_ACTIONS_910B.md](docs/GITHUB_ACTIONS_910B.md) to run the ARM64 CI build with selectable mbatch1, baseline, mbatch8, mbatch8_legacy, matrix, or custom profiles (default: mbatch1; custom MBATCH also defaults to 1). A green compile does not verify NPU proof correctness or TH/s.

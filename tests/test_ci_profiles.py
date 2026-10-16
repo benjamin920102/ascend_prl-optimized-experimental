@@ -21,10 +21,10 @@ class TestBuildProfiles(unittest.TestCase):
                     env["INPUT_PROFILE"] = profile
                 output = subprocess.check_output([sys.executable, str(script)], env=env, text=True)
                 cfg = json.loads(output)["include"][0]
-                self.assertEqual(cfg["id"], profile or "mbatch8")
+                self.assertEqual(cfg["id"], profile or "mbatch1")
                 self.assertEqual(
                     (cfg["bufs"], cfg["vec2x"], cfg["backoff"], cfg["mbatch"], cfg["hit_epoch"]),
-                    (4, 2, 2000, 8, 1))
+                    (4, 2, 2000, 1, 1))
 
     def test_matched_epoch_comparison(self):
         legacy = make_matrix("mbatch8_legacy")["include"][0]

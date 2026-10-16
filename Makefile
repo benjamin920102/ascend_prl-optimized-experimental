@@ -33,7 +33,7 @@ CC   := gcc
 # BLAKE3_USE_TBB uses the pthread split hook in blake3_join.c (not oneTBB).
 CFLAGS := -O3 -fopenmp -march=armv8-a+crypto -DBLAKE3_USE_NEON=1 -DBLAKE3_USE_TBB -DK=$(K) -DRANK=$(RANK) -DMDIM=$(MDIM) -I$(BLK)
 RPATH  := -Wl,-rpath,'$$ORIGIN'
-MBATCH ?= 8
+MBATCH ?= 1
 BUFS ?= 4
 VEC2X ?= 2
 BACKOFF ?= 2000

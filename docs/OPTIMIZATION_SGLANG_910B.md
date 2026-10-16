@@ -38,7 +38,7 @@ Per `band x logical strip` at RANK=128, MBATCH=1:
 2. For `MBATCH=1`, replace zero-stride 2D DMA with an equivalent contiguous 32 KiB read.
 3. For `MBATCH>1`, reserve 4 KiB per lane for transcripts in vector UB. Compute all lanes' original folds first, finish partial GM reads, release the Cube slot, **then** hash each saved transcript. Original folding order, 32-bit arithmetic and transcript layout are kept.
 4. Add compile-time checks for UB footprint, slot scheduling divisibility and `K == NFOLD*NINNER*128`. RANK=128 explicitly requires `NFOLD=32,NINNER=1`.
-5. Use `MBATCH=8` by default in Makefile, CMake, both kernel fallbacks, and GitHub Actions. A inputs upload directly in their natural layout without an extra staging allocation or CPU transpose.
+5. Use `MBATCH=1` by default in Makefile, CMake, both kernel fallbacks, and GitHub Actions. A inputs upload directly in their natural layout without an extra staging allocation or CPU transpose.
 
 **This patch does not reduce the total Fixpipe bytes**. It focuses on overlap and scheduling and exposes safe tiling experiments. Performance gains are hypotheses, not measured results.
 

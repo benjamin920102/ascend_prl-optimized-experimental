@@ -10,8 +10,9 @@ on:
         description: 'Kernel build profile (matrix builds legacy vs epoch A/B)'
         type: choice
         required: true
-        default: mbatch8
+        default: mbatch1
         options:
+          - mbatch1
           - baseline
           - mbatch8
           - mbatch8_legacy
@@ -20,7 +21,7 @@ on:
       custom_mbatch:
         description: 'Custom only: MBATCH (1-8)'
         type: string
-        default: '8'
+        default: '1'
       custom_bufs:
         description: 'Custom only: BUFS (multiple of VEC2X)'
         type: string
@@ -80,10 +81,10 @@ jobs:
         run: |
           set -euo pipefail
           make -n kernel > "$RUNNER_TEMP/make-defaults.txt"
-          for token in -DMBATCH=8 -DBUFS=4 -DVEC2X=2 -DBACKOFF=2000 -DHIT_EPOCH=1; do
+          for token in -DMBATCH=1 -DBUFS=4 -DVEC2X=2 -DBACKOFF=2000 -DHIT_EPOCH=1; do
             grep -F -- "$token" "$RUNNER_TEMP/make-defaults.txt"
           done
-          make -n kernel RANK=128 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1 > "$RUNNER_TEMP/make-kernel.txt"
+          make -n kernel RANK=128 MBATCH=8 BUFS=2 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1 > "$RUNNER_TEMP/make-kernel.txt"
           for token in -DMBATCH=8 -DBUFS=2 -DVEC2X=2 -DBACKOFF=500 -DBASEN=128 -DHIT_EPOCH=1; do
             grep -F -- "$token" "$RUNNER_TEMP/make-kernel.txt"
           done

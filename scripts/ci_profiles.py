@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 PRESETS = {
+    "mbatch1": {"mbatch": 1, "bufs": 4, "vec2x": 2, "backoff": 2000, "basen": 128, "hit_epoch": 1},
     "baseline": {"mbatch": 1, "bufs": 4, "vec2x": 2, "backoff": 2000, "basen": 0, "hit_epoch": 0},
     "mbatch8_legacy": {"mbatch": 8, "bufs": 4, "vec2x": 2, "backoff": 2000, "basen": 128, "hit_epoch": 0},
     "mbatch8": {"mbatch": 8, "bufs": 4, "vec2x": 2, "backoff": 2000, "basen": 128, "hit_epoch": 1},
@@ -58,7 +59,7 @@ def make_matrix(profile, custom=None):
 
 def main():
     custom = {
-        "mbatch": os.getenv("INPUT_CUSTOM_MBATCH", "8"),
+        "mbatch": os.getenv("INPUT_CUSTOM_MBATCH", "1"),
         "bufs": os.getenv("INPUT_CUSTOM_BUFS", "4"),
         "vec2x": os.getenv("INPUT_CUSTOM_VEC2X", "2"),
         "backoff": os.getenv("INPUT_CUSTOM_BACKOFF", "2000"),
@@ -69,7 +70,7 @@ def main():
     if custom["hit_epoch"] not in ("true", "false"):
         raise ValueError("INPUT_CUSTOM_HIT_EPOCH must be true or false")
     custom["hit_epoch"] = "1" if custom["hit_epoch"] == "true" else "0"
-    plan = make_matrix(os.getenv("INPUT_PROFILE", "mbatch8"), custom)
+    plan = make_matrix(os.getenv("INPUT_PROFILE", "mbatch1"), custom)
     value = json.dumps(plan, separators=(",", ":"))
     print(json.dumps(plan, indent=2))
     out = os.getenv("GITHUB_OUTPUT")

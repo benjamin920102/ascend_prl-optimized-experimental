@@ -15,6 +15,7 @@
 #define R 128
 
 extern int pearl_init(int dev, int nbands);
+extern int pearl_mbatch(void);
 extern void pearl_set_b(const int8_t *b, int n);
 extern void pearl_set_b_slot(const int8_t *b, int n, int slot) __attribute__((weak));
 extern void pearl_use_b(int slot) __attribute__((weak));
@@ -50,7 +51,7 @@ static mining_params_t mp;
 
 static int do_handshake(const char *host, int port, const char *addr,
                         const char *worker, const char *pass) {
-    user_conn.msg_id = 0; user_conn.job.have = 0;
+    /* Keep submit IDs monotonic across reconnects. */ user_conn.job.have = 0;
     if (!POOL.miner_chosen_params) mp.have = 0;
     if (POOL.open(&user_conn, host, port, addr, worker, pass, &mp)) return -1;
     for (int i = 0; i < 300; i++) {
@@ -237,6 +238,7 @@ int main(int argc, char **argv) {
     while (do_handshake(host, port, addr, worker, pass)) { puts("[!] handshake failed, retry 10s"); sleep(10); }
 
     long M = mp.m, N = mp.n, Kc = mp.k;
+    printf("[config] M=%ld N=%ld K=%ld MBATCH=%d\n", M, N, Kc, pearl_mbatch());
     int nbands = (int)(N / 64), nstrips = (int)(M / R);
     int tile_h = (int)mp.nrows, n_hi = R / tile_h, ht_per_block = 64 / tile_h;
     if (pearl_init(dev, nbands)) { puts("pearl_init failed"); return 2; }
@@ -354,7 +356,6 @@ int main(int argc, char **argv) {
                             // The proof length is already known; avoid scanning it with strlen.
                             pool_send_line_n(sc, msg, (size_t)hl + plen + tail_len);
                             if (getenv("PRL_RAW")) fprintf(stderr, "[raw>] %s\n", msg);
-                            shares_sub++;
                             printf("[✓] share row=%ld col=%ld job=%s (%ld submitted)\n",
                                    row, col, cur->job_id, shares_sub);
                         }
@@ -373,8 +374,12 @@ int main(int argc, char **argv) {
         // Print the first iteration and the final summary even on a short run.
         if (iter == 1 || stopping || elapsed - last_log_elapsed >= log_interval_s) {
             const double scan_s = (sb.tv_sec - sa.tv_sec) + (sb.tv_nsec - sa.tv_nsec) / 1e9;
-            printf("[*] iter %ld scan %.3fs%s | %.3f iter/s | shares %ld/%ld\n",
-                   iter, scan_s, rc ? " HIT" : "", iter / (elapsed > 0 ? elapsed : 1), shares_acc, shares_sub);
+            const double scans_per_s = iter / (elapsed > 0 ? elapsed : 1);
+            const double estimated_ths = (double)M * N * Kc * scans_per_s / 1e12;
+            printf("[stats] Iteration: %ld | Scan: %.3fs%s | Scan rate: %.3f/s | Estimated hashrate: %.2f TH/s | MBATCH=%d\n",
+                   iter, scan_s, rc ? " HIT" : "", scans_per_s, estimated_ths, pearl_mbatch());
+            printf("[shares] Submitted: %ld | Accepted: %ld | Rejected: %ld\n",
+                   shares_sub, shares_acc, shares_rej);
             last_log_elapsed = elapsed;
         }
         if (stopping) {

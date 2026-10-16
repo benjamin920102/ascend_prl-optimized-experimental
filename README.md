@@ -2,10 +2,10 @@
 
 > Each kernel submission processes exactly one logical strip. There is no batch-size setting. Rebuild the kernel library and miners together after updating.
 
-> **Host context update:** `aclrtSetDevice` runs only in `pearl_init`. One explicit ACL context owns all streams/events; prep threads bind it once, and repeated strip/key submissions use a TLS cache without runtime context calls. Default local/CI settings: `BUFS=4 VEC2X=2 BACKOFF=500 HIT_EPOCH=1`. See [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md).
+> **Host context update:** `aclrtSetDevice` runs only in `pearl_init`. One explicit ACL context owns all streams/events; prep threads bind it once, and repeated strip/key submissions use a TLS cache without runtime context calls. Default local/CI settings: `BUFS=4 VEC2X=2 BACKOFF=500 HIT_EPOCH=1`.
 
 
-> **910B profiler v3:** `HIT_EPOCH=1` is now the default: per-Vector-core epoch hit records replace per-strip device memset. `HIT_EPOCH=0` retains the original protocol for matched A/B testing. GitHub Actions includes `legacy` and `epoch`; see [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md). The new protocol is **not yet NPU-verified**.
+> **910B profiler v3:** `HIT_EPOCH=1` is now the default: per-Vector-core epoch hit records replace per-strip device memset. `HIT_EPOCH=0` retains the original protocol for matched A/B testing. GitHub Actions includes `legacy` and `epoch`. The new protocol is **not yet NPU-verified**.
 
 **English** | [中文](README_zh.md)
 
@@ -30,7 +30,7 @@ coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~30 TH/s/devic
    export POOL=pool.host PORT=7000
    ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 ./scripts/launch.sh
    ```
-   Alternatively, upload this source to your GitHub repository and run **Actions → Run workflow** with the default `default` profile. Download that run's artifact, extract its `.tar.gz` into the project's `build/` directory, then launch. See the [GitHub Actions instructions](docs/GITHUB_ACTIONS_910B.md).
+   Alternatively, upload this source to your GitHub repository and run **Actions → Run workflow** with the default `default` profile. Download that run's artifact, extract its `.tar.gz` into the project's `build/` directory, then launch.
 
    Use binaries compiled from this source or produced by this repository's Actions run. Upstream binaries, Docker images, and the upstream release downloaded by default with `scripts/get_release.sh` do not contain these changes.
 
@@ -142,4 +142,4 @@ MIT — see [LICENSE](LICENSE). Provided **as-is, without warranty**.
 
 ## Experimental CANN 9.0 GitHub Actions builds
 
-See [docs/GITHUB_ACTIONS_910B.md](docs/GITHUB_ACTIONS_910B.md) for the default, baseline, legacy, epoch, matrix and custom profiles. All use one strip per submission. Host checks do not verify NPU proof correctness or throughput.
+GitHub Actions provides default, baseline, legacy, epoch, matrix and custom profiles. All use one strip per submission. Host checks do not verify NPU proof correctness or throughput.

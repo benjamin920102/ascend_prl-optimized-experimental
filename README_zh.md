@@ -2,10 +2,10 @@
 
 > 每次 kernel 提交固定處理 1 個 logical strip，已移除批次大小設定。更新後請一起重新編譯 kernel library 與 miner。
 
-> **Host context 更新：** `aclrtSetDevice` 僅在 `pearl_init` 執行。所有 stream/event 共用顯式建立的 ACL context；prep 執行緒首次使用時綁定，之後 strip/key 提交只檢查 TLS 快取。預設本地／CI 參數：`BUFS=4 VEC2X=2 BACKOFF=500 HIT_EPOCH=1`。詳見 [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md)。
+> **Host context 更新：** `aclrtSetDevice` 僅在 `pearl_init` 執行。所有 stream/event 共用顯式建立的 ACL context；prep 執行緒首次使用時綁定，之後 strip/key 提交只檢查 TLS 快取。預設本地／CI 參數：`BUFS=4 VEC2X=2 BACKOFF=500 HIT_EPOCH=1`。
 
 
-> **910B Profiler v3：** 預設 `HIT_EPOCH=1`，改為每個 Vector Core 獨立的 epoch 命中記錄，免去每次 strip 之間的 device memset。`HIT_EPOCH=0` 可作舊版 A/B 對照；GitHub Actions 有 `legacy` 和 `epoch`。詳見 [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md)。此修改**尚未在實際 NPU 上驗證**。
+> **910B Profiler v3：** 預設 `HIT_EPOCH=1`，改為每個 Vector Core 獨立的 epoch 命中記錄，免去每次 strip 之間的 device memset。`HIT_EPOCH=0` 可作舊版 A/B 對照；GitHub Actions 有 `legacy` 和 `epoch`。此修改**尚未在實際 NPU 上驗證**。
 
 [English](README.md) | **中文**
 
@@ -30,7 +30,7 @@
    export POOL=矿池地址 PORT=7000
    ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 ./scripts/launch.sh
    ```
-   也可以将此源码上传至你的 GitHub 仓库，在 **Actions → Run workflow** 使用默认 `default` profile 编译。下载该次运行的 artifact，将其中的 `.tar.gz` 解压到项目的 `build/` 目录后再启动。详见 [GitHub Actions 操作说明](docs/GITHUB_ACTIONS_910B.md)。
+   也可以将此源码上传至你的 GitHub 仓库，在 **Actions → Run workflow** 使用默认 `default` profile 编译。下载该次运行的 artifact，将其中的 `.tar.gz` 解压到项目的 `build/` 目录后再启动。
 
    请使用此源码编译的程序或此仓库 Actions 生成的产物；上游发布的二进制、Docker 镜像以及 `scripts/get_release.sh` 默认下载的上游版本不包含本次修改。
 
@@ -143,4 +143,4 @@ MIT —— 见 [LICENSE](LICENSE)。按**「现状」提供，不作任何担保
 
 ## 实验版 GitHub Actions 编译
 
-GitHub Actions 提供 default、baseline、legacy、epoch、matrix 與 custom profiles；全部固定每次提交 1 個 strip。詳見 [操作說明](docs/GITHUB_ACTIONS_910B.md)。
+GitHub Actions 提供 default、baseline、legacy、epoch、matrix 與 custom profiles；全部固定每次提交 1 個 strip。

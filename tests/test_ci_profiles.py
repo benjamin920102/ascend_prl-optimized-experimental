@@ -24,7 +24,7 @@ class TestBuildProfiles(unittest.TestCase):
                 self.assertEqual(cfg["id"], profile or "default")
                 self.assertEqual(
                     (cfg["bufs"], cfg["vec2x"], cfg["backoff"], cfg["hit_epoch"]),
-                    (4, 2, 100, 1))
+                    (4, 2, 500, 1))
 
     def test_matched_epoch_comparison(self):
         legacy = make_matrix("legacy")["include"][0]
@@ -42,20 +42,20 @@ class TestBuildProfiles(unittest.TestCase):
         self.assertEqual([p["hit_epoch"] for p in cfgs], [0, 0, 1])
 
     def test_custom(self):
-        p = make_matrix("custom", dict(bufs="4", vec2x="2", backoff="100", basen="128", hit_epoch="1"))
+        p = make_matrix("custom", dict(bufs="4", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
         self.assertEqual(p["include"][0]["bufs"], 4)
 
     def test_reject_incompatible_flags(self):
         with self.assertRaises(ValueError):
-            make_matrix("custom", dict(bufs="3", vec2x="2", backoff="100", basen="128", hit_epoch="1"))
+            make_matrix("custom", dict(bufs="3", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
 
     def test_reject_invalid_mtile(self):
         with self.assertRaises(ValueError):
-            make_matrix("custom", dict(bufs="2", vec2x="2", backoff="100", basen="256", hit_epoch="1"))
+            make_matrix("custom", dict(bufs="2", vec2x="2", backoff="500", basen="256", hit_epoch="1"))
 
     def test_reject_shell_injection(self):
         with self.assertRaises(ValueError):
-            make_matrix("custom", dict(bufs="2; rm -rf /", vec2x="2", backoff="100", basen="128", hit_epoch="1"))
+            make_matrix("custom", dict(bufs="2; rm -rf /", vec2x="2", backoff="500", basen="128", hit_epoch="1"))
 
     def test_reject_bad_name(self):
         with self.assertRaises(ValueError):

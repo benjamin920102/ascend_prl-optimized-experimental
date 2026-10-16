@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 
 PRESETS = {
-    "default": {"bufs": 4, "vec2x": 2, "backoff": 100, "basen": 128, "hit_epoch": 1},
-    "baseline": {"bufs": 4, "vec2x": 2, "backoff": 100, "basen": 0, "hit_epoch": 0},
-    "legacy": {"bufs": 4, "vec2x": 2, "backoff": 100, "basen": 128, "hit_epoch": 0},
-    "epoch": {"bufs": 4, "vec2x": 2, "backoff": 100, "basen": 128, "hit_epoch": 1},
+    "default": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 1},
+    "baseline": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 0, "hit_epoch": 0},
+    "legacy": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 0},
+    "epoch": {"bufs": 4, "vec2x": 2, "backoff": 500, "basen": 128, "hit_epoch": 1},
 }
 
 
@@ -60,7 +60,7 @@ def main():
     custom = {
         "bufs": os.getenv("INPUT_CUSTOM_BUFS", "4"),
         "vec2x": os.getenv("INPUT_CUSTOM_VEC2X", "2"),
-        "backoff": os.getenv("INPUT_CUSTOM_BACKOFF", "100"),
+        "backoff": os.getenv("INPUT_CUSTOM_BACKOFF", "500"),
         "basen": os.getenv("INPUT_CUSTOM_BASEN", "128"),
         "hit_epoch": os.getenv("INPUT_CUSTOM_HIT_EPOCH", "true"),
     }

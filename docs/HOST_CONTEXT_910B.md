@@ -21,7 +21,7 @@
   its calling threads; external code must not switch it behind the TLS cache.
   The existing API remains a single-initialization, single-device instance.
 - Makefile, CMake and kernel fallbacks already had the requested defaults:
-  `BUFS=4 VEC2X=2 BACKOFF=100 HIT_EPOCH=1`.
+  `BUFS=4 VEC2X=2 BACKOFF=500 HIT_EPOCH=1`.
   GitHub Actions custom inputs, Python fallback inputs, and the default
   `default` preset now match. The `epoch` and `legacy`
   profiles remain available for epoch-protocol comparisons; `baseline` remains an explicit comparison profile.

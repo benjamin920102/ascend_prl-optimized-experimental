@@ -1,6 +1,6 @@
 # `ascend_prl` — the world's first Ascend NPU cryptocurrency miner
 
-> **Host context update:** `aclrtSetDevice` runs only in `pearl_init`. One explicit ACL context owns all streams/events; prep threads bind it once, and repeated strip/key submissions use a TLS cache without runtime context calls. Default local/CI settings: `BUFS=4 VEC2X=2 BACKOFF=2000 MBATCH=1 HIT_EPOCH=1`. See [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md).
+> **Host context update:** `aclrtSetDevice` runs only in `pearl_init`. One explicit ACL context owns all streams/events; prep threads bind it once, and repeated strip/key submissions use a TLS cache without runtime context calls. Default local/CI settings: `BUFS=4 VEC2X=2 BACKOFF=500 MBATCH=1 HIT_EPOCH=1`. See [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md).
 
 
 > **910B profiler v3:** `HIT_EPOCH=1` is now the default: per-Vector-core epoch hit records replace per-strip device memset. `HIT_EPOCH=0` retains the original protocol for matched A/B testing. GitHub Actions includes `mbatch8_legacy` and `mbatch8`; see [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md). The new protocol is **not yet NPU-verified**.

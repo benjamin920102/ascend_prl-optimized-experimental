@@ -1,6 +1,6 @@
 # `ascend_prl` — 全球首个昇腾 NPU 加密货币矿工
 
-> **Host context 更新：** `aclrtSetDevice` 僅在 `pearl_init` 執行。所有 stream/event 共用顯式建立的 ACL context；prep 執行緒首次使用時綁定，之後 strip/key 提交只檢查 TLS 快取。預設本地／CI 參數：`BUFS=4 VEC2X=2 BACKOFF=2000 MBATCH=1 HIT_EPOCH=1`。詳見 [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md)。
+> **Host context 更新：** `aclrtSetDevice` 僅在 `pearl_init` 執行。所有 stream/event 共用顯式建立的 ACL context；prep 執行緒首次使用時綁定，之後 strip/key 提交只檢查 TLS 快取。預設本地／CI 參數：`BUFS=4 VEC2X=2 BACKOFF=500 MBATCH=1 HIT_EPOCH=1`。詳見 [`docs/HOST_CONTEXT_910B.md`](docs/HOST_CONTEXT_910B.md)。
 
 
 > **910B Profiler v3：** 預設 `HIT_EPOCH=1`，改為每個 Vector Core 獨立的 epoch 命中記錄，免去每次 strip 之間的 device memset。`HIT_EPOCH=0` 可作舊版 A/B 對照；GitHub Actions 有 `mbatch8_legacy` 和 `mbatch8`。詳見 [`docs/HIT_EPOCH_PROFILER_910B.md`](docs/HIT_EPOCH_PROFILER_910B.md)。此修改**尚未在實際 NPU 上驗證**。

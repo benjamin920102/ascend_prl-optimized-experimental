@@ -12,16 +12,16 @@
 
 | Profile | MBATCH | BUFS | BACKOFF | BASEN | HIT_EPOCH | Purpose |
 |---|---:|---:|---:|---:|---:|---|
-| `mbatch1` (default) | 1 | 4 | 2000 | 128 | **1** | One strip per batch with per-core hit epochs |
-| `baseline` | 1 | 4 | 2000 | 0 | **0** | Explicit opt-in reference with the original kernel/hit protocol |
-| `mbatch8_legacy` | 8 | 4 | 2000 | 128 | **0** | Matched A/B control retaining per-strip memset |
-| `mbatch8` | 8 | 4 | 2000 | 128 | **1** | Eight strips per batch with per-core hit epochs |
+| `mbatch1` (default) | 1 | 4 | 500 | 128 | **1** | One strip per batch with per-core hit epochs |
+| `baseline` | 1 | 4 | 500 | 0 | **0** | Explicit opt-in reference with the original kernel/hit protocol |
+| `mbatch8_legacy` | 8 | 4 | 500 | 128 | **0** | Matched A/B control retaining per-strip memset |
+| `mbatch8` | 8 | 4 | 500 | 128 | **1** | Eight strips per batch with per-core hit epochs |
 | `matrix` | — | — | — | — | — | Independently compile all three profiles |
-| `custom` | 1 | 4 | 2000 | 128 | **1** | Defaults shown; each custom input can be overridden |
+| `custom` | 1 | 4 | 500 | 128 | **1** | Defaults shown; each custom input can be overridden |
 
-All presets target `RANK=128`, `VEC2X=2`, `BUFS=4`, `BACKOFF=2000`.
+All presets target `RANK=128`, `VEC2X=2`, `BUFS=4`, `BACKOFF=500`.
 
-Both the workflow selection and `scripts/ci_profiles.py` default to `mbatch1`. Custom inputs also default to `MBATCH=1`, `BUFS=4`, `VEC2X=2`, `BACKOFF=2000`, `HIT_EPOCH=1`. The `baseline` profile deliberately keeps MBATCH=1 for comparison; select it explicitly only when needed. Local Makefile/CMake defaults use the same five values. The existing `BASEN` choice is unchanged: local `0`, CI mbatch1/mbatch8/custom `128`; pass `BASEN=128` locally for a matched build. A-side input always uses the natural row-major layout with direct H2D upload.
+Both the workflow selection and `scripts/ci_profiles.py` default to `mbatch1`. Custom inputs also default to `MBATCH=1`, `BUFS=4`, `VEC2X=2`, `BACKOFF=500`, `HIT_EPOCH=1`. The `baseline` profile deliberately keeps MBATCH=1 for comparison; select it explicitly only when needed. Local Makefile/CMake defaults use the same five values. The existing `BASEN` choice is unchanged: local `0`, CI mbatch1/mbatch8/custom `128`; pass `BASEN=128` locally for a matched build. A-side input always uses the natural row-major layout with direct H2D upload.
 
 **Compare `mbatch8_legacy` and `mbatch8` first.** They differ **only** in `HIT_EPOCH`, isolating the observed `aclrtMemsetAsync` long-tail hypothesis. `baseline` differs in multiple tiling parameters and cannot isolate the change.
 
@@ -55,5 +55,5 @@ c++ -O2 -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Itests/stubs -o /tm
 python3 scripts/ci_profiles.py  # profile=mbatch1 by default
 INPUT_PROFILE=matrix python3 scripts/ci_profiles.py
 make -n kernel  # checks local defaults
-make -n kernel RANK=128 MBATCH=8 BUFS=4 VEC2X=2 BACKOFF=2000 BASEN=128 HIT_EPOCH=1
+make -n kernel RANK=128 MBATCH=8 BUFS=4 VEC2X=2 BACKOFF=500 BASEN=128 HIT_EPOCH=1
 ```

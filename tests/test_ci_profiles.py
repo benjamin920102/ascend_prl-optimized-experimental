@@ -24,7 +24,7 @@ class TestBuildProfiles(unittest.TestCase):
                 self.assertEqual(cfg["id"], profile or "mbatch1")
                 self.assertEqual(
                     (cfg["bufs"], cfg["vec2x"], cfg["backoff"], cfg["mbatch"], cfg["hit_epoch"]),
-                    (4, 2, 2000, 1, 1))
+                    (4, 2, 500, 1, 1))
 
     def test_matched_epoch_comparison(self):
         legacy = make_matrix("mbatch8_legacy")["include"][0]

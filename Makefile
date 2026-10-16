@@ -36,7 +36,7 @@ RPATH  := -Wl,-rpath,'$$ORIGIN'
 MBATCH ?= 1
 BUFS ?= 4
 VEC2X ?= 2
-BACKOFF ?= 2000
+BACKOFF ?= 500
 BASEN ?= 0
 # Epoch-tagged, per-Vector-core hit protocol eliminates a per-strip device memset.
 # HIT_EPOCH=0 restores the legacy path for matched A/B profiling.

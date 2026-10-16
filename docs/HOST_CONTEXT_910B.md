@@ -21,7 +21,7 @@
   its calling threads; external code must not switch it behind the TLS cache.
   The existing API remains a single-initialization, single-device instance.
 - Makefile, CMake and kernel fallbacks already had the requested defaults:
-  `BUFS=4 VEC2X=2 BACKOFF=2000 MBATCH=1 HIT_EPOCH=1`.
+  `BUFS=4 VEC2X=2 BACKOFF=500 MBATCH=1 HIT_EPOCH=1`.
   GitHub Actions custom inputs, Python fallback inputs, and the default
   `mbatch1` preset now match. The `mbatch8` and `mbatch8_legacy`
   profiles remain available for explicit comparisons; `baseline` remains an explicit comparison profile.

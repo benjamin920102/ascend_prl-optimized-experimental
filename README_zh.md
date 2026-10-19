@@ -1,10 +1,3 @@
-> Diagnostic build: adds thread-creation errors and requested/effective/actual worker counts. No utilization improvement is claimed. See AICPU_NOTES.md.
-
-> V2 defaults to AICPU An generation. When updating, copy kernel/ only and preserve your customized launcher. See AICPU_NOTES.md.
-
-> AICPU parallel preparation source update: see [AICPU_NOTES.md](AICPU_NOTES.md).
-> This update has host algorithm tests only; original performance figures below do not validate this version.
-
 # `ascend_prl` — 全球首个昇腾 NPU 加密货币矿工
 
 [English](README.md) | **中文**
@@ -153,7 +146,3 @@ MIT —— 见 [LICENSE](LICENSE)。按**「现状」提供，不作任何担保
 
 <!-- discovery: 昇腾 910B / Ascend 910B4 NPU Pearl 挖矿 miner; 用闲置 NPU 挖 Pearl (PRL) 币;
      world-first Ascend NPU cryptocurrency miner; Huawei Atlas 800/300 idle NPU mining. -->
-
-## 本次优化补丁
-
-memset／spin 修改、CANN 官方依据与验证限制请见 `PATCH_REVIEW_zh.md`。host strip 管线预设四槽（`make PIPE_DEPTH=4`）。本压缩包依要求不附 CPU 回归测试或实机测试工具。

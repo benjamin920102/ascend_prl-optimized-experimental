@@ -1,10 +1,3 @@
-> Diagnostic build: adds thread-creation errors and requested/effective/actual worker counts. No utilization improvement is claimed. See AICPU_NOTES.md.
-
-> V2 defaults to AICPU An generation. When updating, copy kernel/ only and preserve your customized launcher. See AICPU_NOTES.md.
-
-> AICPU parallel preparation source update: see [AICPU_NOTES.md](AICPU_NOTES.md).
-> This update has host algorithm tests only; original performance figures below do not validate this version.
-
 # `ascend_prl` — the world's first Ascend NPU cryptocurrency miner
 
 [![No Maintenance Intended](http://unmaintained.tech/badge.svg)](http://unmaintained.tech/)

@@ -1,3 +1,8 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+#include <sched.h>
+#include <errno.h>
 #include "aicpu_api.h"
 #include "a_prep/args.h"
 #include "a_prep/blake3_parallel.h"
@@ -59,7 +64,19 @@ __global__ __aicpu__ uint32_t pearl_prep_a(void *arg){
  team.run((p.m*p.rank+31)/32,eal_range,arg);
  team.run((p.k+7)/8,index_range,arg);
  if(p.make_an)team.run(p.m,an_range,arg);
- uint32_t actual=team.workers();memcpy(p.roots+64,&actual,sizeof(actual));
+ PearlPrepStats stats={};
+ stats.effective_workers=team.effective();stats.actual_workers=team.workers();
+ stats.create_error=team.create_error();stats.online_cpus=team.online_cpus();
+ stats.affinity_cpus=-1;stats.current_cpu=-1;
+#ifdef __linux__
+ cpu_set_t mask;CPU_ZERO(&mask);
+ if(sched_getaffinity(0,sizeof(mask),&mask)==0){
+  stats.affinity_cpus=0;
+  for(int i=0;i<CPU_SETSIZE;i++)if(CPU_ISSET(i,&mask))++stats.affinity_cpus;
+ }else stats.affinity_error=errno;
+ stats.current_cpu=sched_getcpu();
+#endif
+ memcpy(p.roots+64,&stats,sizeof(stats));
 #ifndef PEARL_PREP_HOST_TEST
  // Join/barriers make worker writes visible to the caller; publish to AI Core.
  AscendC::DataStoreBarrier();

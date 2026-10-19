@@ -10,12 +10,15 @@ public:
  using Fn = void (*)(void *, size_t, size_t);
  explicit PearlTeam(unsigned requested) {
   long online = sysconf(_SC_NPROCESSORS_ONLN);
+  online_=(int)online;
   unsigned n = requested ? requested : (online > 0 ? (unsigned)online : 1);
   if(n > 64) n = 64;
   if(!n) n = 1;
+  effective_=n;
   for(unsigned i=0;i+1<n;i++) {
    states_[i]={this,i};
-   if(pthread_create(&ids_[i],nullptr,entry,&states_[i])) break;
+   int rc=pthread_create(&ids_[i],nullptr,entry,&states_[i]);
+   if(rc) { createError_=rc; break; }
    ++created_;
   }
   workers_=created_+1;
@@ -26,6 +29,9 @@ public:
   pthread_cond_destroy(&wake_); pthread_cond_destroy(&done_); pthread_mutex_destroy(&mu_);
  }
  unsigned workers() const { return workers_; }
+ unsigned effective() const { return effective_; }
+ int create_error() const { return createError_; }
+ int online_cpus() const { return online_; }
  void run(size_t count,Fn fn,void *ctx) {
   // A task can be expensive (e.g. one PRNG partition); even a few tasks
   // must run in parallel. Tiny tree reductions are handled by their caller.
@@ -58,6 +64,7 @@ private:
  pthread_mutex_t mu_=PTHREAD_MUTEX_INITIALIZER;
  pthread_cond_t wake_=PTHREAD_COND_INITIALIZER,done_=PTHREAD_COND_INITIALIZER;
  pthread_t ids_[63]; State states_[63];
- unsigned created_=0,workers_=1,epoch_=0,pending_=0;
+ unsigned created_=0,workers_=1,epoch_=0,pending_=0,effective_=1;
+ int createError_=0,online_=0;
  size_t count_=0; Fn fn_=nullptr; void *ctx_=nullptr; bool stop_=false;
 };

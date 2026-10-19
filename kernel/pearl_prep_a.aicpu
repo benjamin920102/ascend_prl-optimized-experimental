@@ -31,6 +31,21 @@ static void index_range(void *arg,size_t lo,size_t hi){
  const PearlPrepArgs &p=*(const PearlPrepArgs*)arg;
  for(size_t i=lo;i<hi;i++){uint8_t d[32];draw((uint32_t)i,p.roots+32,1,d);for(unsigned j=0;j<8 && i*8+j<p.k;j++){uint32_t u=pearl_b3::load(d+4*j),f=u&(p.rank-1);p.first[i*8+j]=(uint16_t)f;p.second[i*8+j]=(uint16_t)(f^(1u+(uint32_t)(((uint64_t)(p.rank-1)*u)>>32)));}}
 }
+// Each worker owns complete rows. EAL for a row remains cache-local;
+// A/An accesses are contiguous. No byte-at-a-time AI Core GM loads.
+static void an_range(void *arg,size_t lo,size_t hi){
+ const PearlPrepArgs &p=*(const PearlPrepArgs*)arg;
+ for(size_t row=lo;row<hi;row++){
+  const int8_t *a=p.a+row*p.k,*e=p.eal+row*p.rank;
+  int8_t *an=p.an+row*p.k;
+  for(size_t col=0;col<p.k;col++){
+   int v=(int)a[col]+(int)e[p.first[col]]-(int)e[p.second[col]];
+   // Explicit modulo 256, followed by signed interpretation.
+   unsigned u=(unsigned)v&255u;
+   an[col]=(int8_t)(u<128u?(int)u:(int)u-256);
+  }
+ }
+}
 __global__ __aicpu__ uint32_t pearl_prep_a(void *arg){
  const PearlPrepArgs &p=*(const PearlPrepArgs*)arg;const uint64_t total=p.m*p.k;
  PearlTeam team(p.worker_threads);
@@ -43,6 +58,8 @@ __global__ __aicpu__ uint32_t pearl_prep_a(void *arg){
  memcpy(msg,p.commit_b,32);memcpy(msg+32,salted,32);pearl_b3::hash(msg,64,nullptr,p.roots+32);
  team.run((p.m*p.rank+31)/32,eal_range,arg);
  team.run((p.k+7)/8,index_range,arg);
+ if(p.make_an)team.run(p.m,an_range,arg);
+ uint32_t actual=team.workers();memcpy(p.roots+64,&actual,sizeof(actual));
 #ifndef PEARL_PREP_HOST_TEST
  // Join/barriers make worker writes visible to the caller; publish to AI Core.
  AscendC::DataStoreBarrier();

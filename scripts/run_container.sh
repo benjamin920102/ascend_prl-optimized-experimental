@@ -32,6 +32,7 @@ docker run -d --name "$NAME" --network host --restart unless-stopped --privilege
   ${PRL_COEXIST_GUARD:+-e PRL_COEXIST_GUARD="$PRL_COEXIST_GUARD"} \
   ${PRL_GUARD_POLL_MS:+-e PRL_GUARD_POLL_MS="$PRL_GUARD_POLL_MS"} \
   ${PRL_GUARD_ACK_S:+-e PRL_GUARD_ACK_S="$PRL_GUARD_ACK_S"} \
+  -e PRL_AICPU_AN="${PRL_AICPU_AN:-1}" \
   -e PRL_AICPU_THREADS="${PRL_AICPU_THREADS:-0}" \
   ${PRL_LOOP_PROF:+-e PRL_LOOP_PROF="$PRL_LOOP_PROF"} \
   "$TAG"

@@ -3,7 +3,6 @@
 #include <string.h>
 #include <omp.h>
 #include "blake3.h"
-#include "prep_state.h"
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
@@ -90,7 +89,7 @@ static void draw_hash(uint32_t idx, const uint8_t *seed, const uint8_t *key,
  * Default: zero-fill + 8-byte seed stamp (gzip-friendly; ~10-100x compression on proofs).
  * PRL_ZERO_SEED=0: legacy uniform random fill (incompressible).
  */
-static void fill_buf(int8_t *buf, int64_t total, uint64_t seed, int nt, prep_seed_state *state) {
+static void fill_buf(int8_t *buf, int64_t total, uint64_t seed, int nt) {
     const char *zs = getenv("PRL_ZERO_SEED");
     if (zs && zs[0] == '0' && zs[1] == '\0') {
 #pragma omp parallel num_threads(nt)
@@ -107,18 +106,9 @@ static void fill_buf(int8_t *buf, int64_t total, uint64_t seed, int nt, prep_see
                     buf[i++] = (int8_t)((uint8_t)v % 127) - 63;
             }
         }
-        // A later switch back to zero mode must clear the random contents.
-        if (state) state->zero_valid = 0;
         return;
     }
-    // State belongs to this exact allocation; generic APIs pass NULL.
-    if (!state || !state->zero_valid || state->buffer != buf || state->size != total)
-        memset(buf, 0, (size_t)total);
-    if (state) {
-        state->buffer = buf;
-        state->size = total;
-        state->zero_valid = 1;
-    }
+    memset(buf, 0, (size_t)total);
     if (total >= 8) {
         uint64_t s = seed;
         for (int i = 0; i < 8; i++, s >>= 8)
@@ -233,22 +223,24 @@ static void compute_bn(const int8_t *B, const int8_t *EBR, int8_t *out,
 }
 
 #define BN_PACK 64
-// Pack the noised B matrix by 64-column band and rank-sized fold, matching the
-// NPU cube kernel's [band][fold][column][k] access order.
+// Rank-128 uses [band][group][column][512], four folds per group.
+// Other ranks retain [band][fold][column][R]. Match repackBT exactly.
 static void compute_bn_pack(const int8_t *B, const int8_t *EBR, int8_t *bt,
                             const uint16_t *f, const uint16_t *s,
                             int64_t k, int64_t n, int R, int nt) {
-    int64_t nbands = n / BN_PACK, NFOLD = k / R;
+    const int64_t pack_k = R == 128 ? 512 : R;
+    if (k % pack_k != 0) abort();
+    int64_t nbands = n / BN_PACK, ngroups = k / pack_k;
 #pragma omp parallel for schedule(static) num_threads(nt)
     for (int64_t jp = 0; jp < nbands; jp++) {
-        for (int64_t p = 0; p < NFOLD; p++) {
+        for (int64_t p = 0; p < ngroups; p++) {
             for (int64_t m = 0; m < BN_PACK; m++) {
                 int64_t col = jp * BN_PACK + m;
                 const int8_t *bcol = B + col * k;
                 const int8_t *ecol = EBR + col * R;
-                int8_t *dst = bt + ((jp * NFOLD + p) * BN_PACK + m) * R;
-                for (int64_t ki = 0; ki < R; ki++) {
-                    int64_t row = p * R + ki;
+                int8_t *dst = bt + ((jp * ngroups + p) * BN_PACK + m) * pack_k;
+                for (int64_t ki = 0; ki < pack_k; ki++) {
+                    int64_t row = p * pack_k + ki;
                     dst[ki] = (int8_t)(bcol[row] + ecol[f[row]] - ecol[s[row]]);
                 }
             }
@@ -315,10 +307,9 @@ static int prep_random_impl(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *
                             int64_t m, int64_t n, int64_t k, int R,
                             int8_t *A_noised, int8_t *Bt_out, int8_t *EAL, int8_t *EBR,
                             uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB,
-                            int nt, int pack, int cert_mode,
-                            prep_seed_state *as, prep_seed_state *bs) {
-    fill_buf(A, m * k, seed, nt, as);
-    fill_buf(B, n * k, seed ^ 0xB0B0B0B0ULL, nt, bs);
+                            int nt, int pack, int cert_mode) {
+    fill_buf(A, m * k, seed, nt);
+    fill_buf(B, n * k, seed ^ 0xB0B0B0B0ULL, nt);
     return prep_from_ab_impl(A, B, key, m, n, k, R, A_noised, Bt_out,
                              EAL, EBR, rootA, rootB, commitA, commitB, nt, pack, cert_mode);
 }
@@ -330,7 +321,7 @@ int prep_random(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *key,
                 int nt, int cert_version) {
     int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
     return prep_random_impl(seed, A, B, key, m, n, k, R, A_noised, Bt_noised,
-                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 0, cert_mode, NULL, NULL);
+                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 0, cert_mode);
 }
 
 int prep_random_bt(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *key,
@@ -340,17 +331,17 @@ int prep_random_bt(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *key,
                 int nt, int cert_version) {
     int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
     return prep_random_impl(seed, A, B, key, m, n, k, R, A_noised, bt_packed,
-                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 1, cert_mode, NULL, NULL);
+                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 1, cert_mode);
 }
 
-int prep_b_side_cached(uint64_t seed, int8_t *B, const uint8_t *key,
+int prep_b_side(uint64_t seed, int8_t *B, const uint8_t *key,
                 int64_t n, int64_t k, int R,
                 int8_t *bt_packed, int8_t *EBR, uint8_t *rootB, uint8_t *commitB,
-                int nt, int cert_version, prep_seed_state *state) {
+                int nt, int cert_version) {
     if ((n * k) % 1024) return -1;
     if (k > (1 << 16)) return -2;
 
-    fill_buf(B, n * k, seed, nt, state);
+    fill_buf(B, n * k, seed, nt);
     calc_mk(B, n * k, key, rootB);
 
     int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
@@ -372,14 +363,14 @@ int prep_b_side_cached(uint64_t seed, int8_t *B, const uint8_t *key,
     return 0;
 }
 
-int prep_a_side_cached(uint64_t seed, int8_t *A, const uint8_t *key, const uint8_t *commitB,
+int prep_a_side(uint64_t seed, int8_t *A, const uint8_t *key, const uint8_t *commitB,
                 int64_t m, int64_t k, int R,
                 int8_t *A_noised, int8_t *EAL, uint8_t *rootA, uint8_t *commitA,
-                int nt, int cert_version, prep_seed_state *state) {
+                int nt, int cert_version) {
     if ((m * k) % 1024) return -1;
     if (k > (1 << 16)) return -2;
 
-    fill_buf(A, m * k, seed, nt, state);
+    fill_buf(A, m * k, seed, nt);
     calc_mk(A, m * k, key, rootA);
 
     int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
@@ -399,30 +390,4 @@ int prep_a_side_cached(uint64_t seed, int8_t *A, const uint8_t *key, const uint8
 
     compute_an(A, EAL, A_noised, fA, sA, m, k, R, nt);
     return 0;
-}
-
-int prep_a_side(uint64_t seed, int8_t *A, const uint8_t *key, const uint8_t *commitB,
-                int64_t m, int64_t k, int R,
-                int8_t *A_noised, int8_t *EAL, uint8_t *rootA, uint8_t *commitA,
-                int nt, int cert_version) {
-    return prep_a_side_cached(seed, A, key, commitB, m, k, R, A_noised, EAL, rootA, commitA, nt, cert_version, NULL);
-}
-
-int prep_b_side(uint64_t seed, int8_t *B, const uint8_t *key,
-                int64_t n, int64_t k, int R,
-                int8_t *bt_packed, int8_t *EBR, uint8_t *rootB, uint8_t *commitB,
-                int nt, int cert_version) {
-    return prep_b_side_cached(seed, B, key, n, k, R, bt_packed, EBR, rootB, commitB, nt, cert_version, NULL);
-}
-
-// Explicit caller-owned state avoids unsafe process-global pointer caches.
-int prep_random_cached(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *key,
-                int64_t m, int64_t n, int64_t k, int R,
-                int8_t *An, int8_t *Bt, int8_t *EAL, int8_t *EBR,
-                uint8_t *rA, uint8_t *rB, uint8_t *cA, uint8_t *cB,
-                int nt, int cert_version, int pack,
-                prep_seed_state *as, prep_seed_state *bs) {
-    int mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
-    return prep_random_impl(seed, A, B, key, m, n, k, R, An, Bt, EAL, EBR,
-                            rA, rB, cA, cB, nt, pack, mode, as, bs);
 }

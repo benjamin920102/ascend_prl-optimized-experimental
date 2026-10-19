@@ -1,11 +1,13 @@
 # `ascend_prl` — the world's first Ascend NPU cryptocurrency miner
 
+Default rank-128 now uses eight K=512 MDL Partial Output groups while retaining all 32 K=128 partials and fold steps. See [change notes](CHANGES_K512.md). No build or tests were run for this change.
+
 [![No Maintenance Intended](http://unmaintained.tech/badge.svg)](http://unmaintained.tech/)
 
 **English** | [中文](README_zh.md)
 
 A from-scratch miner for the [Pearl](https://arxiv.org/abs/2504.09971) Proof-of-**Useful**-Work
-coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~30 TH/s/device end-to-end**.
+coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~10 TH/s/device end-to-end**.
 
 > **DISCLAMER:** for educational purpose only. Use only with hardware you are authorized to.
 

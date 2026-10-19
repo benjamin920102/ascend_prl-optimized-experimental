@@ -26,10 +26,6 @@ endif
 MDIM ?= 16384
 # Host strip slots (separate from kernel BUFS). Use 2 for an A/B baseline.
 PIPE_DEPTH ?= 4
-BUFS ?= 4
-VEC2X ?= 2
-VEC_PREFETCH ?= 3
-BACKOFF ?= 500
 
 OUT  := build
 # Locate BLAKE3 C sources from the Cargo registry when building the standalone miner.
@@ -63,8 +59,7 @@ guard: $(OUT)
 kernel: $(OUT)
 	cd kernel && rm -rf build && mkdir build && cd build && \
 	  cmake -DCMAKE_ASC_RUN_MODE=npu -DCMAKE_ASC_ARCHITECTURES=dav-2201 \
-	        -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=$(BUFS) -DVEC2X=$(VEC2X) \
-	        -DVEC_PREFETCH=$(VEC_PREFETCH) -DBACKOFF=$(BACKOFF) \
+	        -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=4 -DVEC2X=2 \
 	        -DCMAKE_MODULE_PATH="$$ASC_MODULES" .. && make -j
 	cp kernel/build/libpearl_hlc2.so $(OUT)/
 

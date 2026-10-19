@@ -1,9 +1,11 @@
 # `ascend_prl` — 全球首个昇腾 NPU 加密货币矿工
 
+預設 rank=128 已改用 8 組 K=512 MDL Partial Output，保留完整 32 份 K=128 partial 與 fold。詳見 [修改摘要](CHANGES_K512.md)；此修改未執行編譯或測試。
+
 [English](README.md) | **中文**
 
 一个从零编写、面向 [Pearl](https://arxiv.org/abs/2504.09971) **有用工作量证明（Proof-of-**Useful**-Work）** 币的矿工，
-运行在华为**昇腾 910B** NPU 上。已在 910B4 上实测，端到端可达 **~30 TH/s/卡**。
+运行在华为**昇腾 910B** NPU 上。已在 910B4 上实测，端到端可达 **~10 TH/s/卡**。
 
 > **免责声明：** 仅供学习研究之用。请仅在你拥有授权的硬件上运行。
 

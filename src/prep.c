@@ -1,55 +1,84 @@
-/*
- * Pearl miner CPU prep in C.
- *
- * prep_from_ab : caller supplies A (m*k int8) and B (n*k int8); computes
- *   keyed-blake3 merkle roots (root == keyed b3 of full chunk-aligned buffer),
- *   commitment, canonical noise and noised matrices
- *   A_noised (m*k) + B_T_noised (k*n).
- * prep_random : fills A/B with xoshiro256** values in [-63,63] first.
- */
+#include "prl_timing.h"
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include <omp.h>
 #include "blake3.h"
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#define HAVE_NEON 1
+#endif
 
 #define DIGEST 32
 #define ZERO_POINT 32
 #define RANGE_MASK 63
 
-/* ------------------------------------------------------------------ utils */
+/* Certificate v3 binds each Merkle root to its matrix dimension before deriving
+ * noise seeds. These constants must match the A/B domain salts in zk_pow.
+ */
+static const uint8_t SEED_SALT_A[32] = {
+    0x82, 0x49, 0x40, 0x6c, 0xa0, 0xed, 0x15, 0x16, 0x96, 0x16, 0xf6, 0x92, 0xfc, 0xf0, 0x76, 0xf8,
+    0x92, 0xdb, 0xdb, 0x2a, 0x70, 0x23, 0xb8, 0x52, 0xf0, 0xd4, 0x77, 0x19, 0xc3, 0x90, 0x01, 0x7b,
+};
+static const uint8_t SEED_SALT_B[32] = {
+    0x11, 0x30, 0x06, 0x32, 0xec, 0x63, 0x01, 0xca, 0x2b, 0xe2, 0xaf, 0x71, 0x8b, 0x3f, 0x4d, 0x4f,
+    0x1a, 0xe9, 0xc6, 0x39, 0x88, 0xe8, 0xcc, 0x04, 0x48, 0x44, 0x30, 0x1d, 0x71, 0xb8, 0x9a, 0xa9,
+};
 
-typedef struct { int t, nt; void *ctx; } span_t;
-
-static void run_threads(int nt, void *(*fn)(void *), void *ctx, span_t *spans) {
-    pthread_t th[256];
-    if (nt > 256) nt = 256;
-    for (int i = 0; i < nt; i++) { spans[i].t = i; spans[i].nt = nt; spans[i].ctx = ctx; }
-    for (int i = 0; i < nt; i++) pthread_create(&th[i], 0, fn, &spans[i]);
-    for (int i = 0; i < nt; i++) pthread_join(th[i], 0);
+// Hash a fixed 64-byte block: root || dimension (LE u32) || 28 zero bytes.
+static void bind_root(const uint8_t root[32], uint32_t dim, const uint8_t salt[32], uint8_t out[32]) {
+    uint8_t msg[64] = {0};
+    memcpy(msg, root, 32);
+    memcpy(msg + 32, &dim, 4);
+    blake3_hasher h;
+    blake3_hasher_init_keyed(&h, salt);
+    blake3_hasher_update(&h, msg, 64);
+    blake3_hasher_finalize(&h, out, DIGEST);
 }
 
-/* xoshiro256** seeded via splitmix64 */
+#define CERT_LEGACY 0
+#define CERT_SALTED 1
+
+static void salt_roots(int cert_mode, const uint8_t rootA[32], const uint8_t rootB[32],
+                        uint32_t m, uint32_t n, uint8_t outA[32], uint8_t outB[32]) {
+    if (cert_mode == CERT_SALTED) {
+        bind_root(rootA, m, SEED_SALT_A, outA);
+        bind_root(rootB, n, SEED_SALT_B, outB);
+    } else {
+        memcpy(outA, rootA, 32);
+        memcpy(outB, rootB, 32);
+    }
+}
+
 typedef struct { uint64_t s[4]; } rng_t;
+
 static uint64_t splitmix(uint64_t *x) {
     uint64_t z = (*x += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
 }
-static void rng_seed(rng_t *r, uint64_t seed) { for (int i = 0; i < 4; i++) r->s[i] = splitmix(&seed); }
-static inline uint64_t rotl64(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
+
+static void rng_seed(rng_t *r, uint64_t seed) {
+    for (int i = 0; i < 4; i++) r->s[i] = splitmix(&seed);
+}
+
+static inline uint64_t rotl64(uint64_t x, int k) {
+    return (x << k) | (x >> (64 - k));
+}
+
 static inline uint64_t rng_next(rng_t *r) {
     uint64_t *s = r->s, res = rotl64(s[1] * 5, 7) * 9, t = s[1] << 17;
     s[2] ^= s[0]; s[3] ^= s[1]; s[1] ^= s[2]; s[0] ^= s[3]; s[2] ^= t; s[3] = rotl64(s[3], 45);
     return res;
 }
 
-/* keyed blake3 of message = int32[8]{ [slot]=1+idx } || seed32  (noise draw) */
 static void draw_hash(uint32_t idx, const uint8_t *seed, const uint8_t *key,
                       int slot, uint8_t out[DIGEST]) {
     uint8_t msg[64] = {0};
     uint32_t v = idx + 1;
-    memcpy(msg + slot * 4, &v, 4);          /* LE */
+    memcpy(msg + slot * 4, &v, 4);
     memcpy(msg + 32, seed, 32);
     blake3_hasher h;
     blake3_hasher_init_keyed(&h, key);
@@ -57,283 +86,414 @@ static void draw_hash(uint32_t idx, const uint8_t *seed, const uint8_t *key,
     blake3_hasher_finalize(&h, out, DIGEST);
 }
 
-/* ----------------------------------------------------- random A/B (int8) */
-
-typedef struct { int8_t *buf; int64_t total; uint64_t seed; } fill_ctx;
-static void *fill_worker(void *a) {
-    span_t *sp = a; fill_ctx *c = sp->ctx;
-    int64_t lo = c->total * sp->t / sp->nt, hi = c->total * (sp->t + 1) / sp->nt;
-    rng_t r; rng_seed(&r, c->seed + 0x9E37 * (uint64_t)(sp->t + 1));
-    int64_t i = lo;
-    while (i < hi) {
-        uint64_t v = rng_next(&r);
-        for (int b = 0; b < 8 && i < hi; b++, v >>= 8)
-            c->buf[i++] = (int8_t)((uint8_t)v % 127) - 63;
+/*
+ * Default: zero-fill + 8-byte seed stamp (gzip-friendly; ~10-100x compression on proofs).
+ * PRL_ZERO_SEED=0: legacy uniform random fill (incompressible).
+ */
+static void fill_buf(int8_t *buf, int64_t total, uint64_t seed, int nt) {
+    double timing_start = prl_now_ms();
+    const char *zs = getenv("PRL_ZERO_SEED");
+    if (zs && zs[0] == '0' && zs[1] == '\0') {
+#pragma omp parallel num_threads(nt)
+        {
+            int t = omp_get_thread_num();
+            int num_t = omp_get_num_threads();
+            int64_t lo = total * t / num_t, hi = total * (t + 1) / num_t;
+            rng_t r;
+            rng_seed(&r, seed + 0x9E37 * (uint64_t)(t + 1));
+            int64_t i = lo;
+            while (i < hi) {
+                uint64_t v = rng_next(&r);
+                for (int b = 0; b < 8 && i < hi; b++, v >>= 8)
+                    buf[i++] = (int8_t)((uint8_t)v % 127) - 63;
+            }
+        }
+        prl_elapsed("prep.fill", timing_start);
+        return;
     }
-    return 0;
+    memset(buf, 0, (size_t)total);
+    if (total >= 8) {
+        uint64_t s = seed;
+        for (int i = 0; i < 8; i++, s >>= 8)
+            buf[i] = (int8_t)(s & 0xff);
+    }
+    (void)nt;
+
+    prl_elapsed("prep.fill", timing_start);
 }
 
-/* ------------------------------------------------- merkle root (keyed b3) */
-
-typedef struct { const int8_t *buf; int64_t len; const uint8_t *key; uint8_t *root; } mk_ctx;
-static void *mk_worker(void *a) {
-    mk_ctx *c = a;
+static void calc_mk(const int8_t *buf, int64_t len, const uint8_t *key, uint8_t *root, const char *metric) {
+    double timing_start = prl_now_ms();
     blake3_hasher h;
-    blake3_hasher_init_keyed(&h, c->key);
+    blake3_hasher_init_keyed(&h, key);
 #if defined(BLAKE3_USE_TBB)
-    /* parallel tree-hash (identical digest). Needs the
-     * pthread blake3_compress_subtree_wide_join_tbb (blake3_join.c) linked in. */
-    blake3_hasher_update_tbb(&h, c->buf, (size_t)c->len);
+    blake3_hasher_update_tbb(&h, buf, (size_t)len);
 #else
-    blake3_hasher_update(&h, c->buf, (size_t)c->len);
+    blake3_hasher_update(&h, buf, (size_t)len);
 #endif
-    blake3_hasher_finalize(&h, c->root, DIGEST);
-    return 0;
+    blake3_hasher_finalize(&h, root, DIGEST);
+
+    prl_elapsed(metric, timing_start);
 }
 
-/* ----------------------------------------------------------- noise draws */
+static void unif_int8(const uint8_t *seed, const uint8_t *key, int64_t nbytes, int8_t *out, int nt) {
+    double timing_start = prl_now_ms();
+    int64_t draws = (nbytes + DIGEST - 1) / DIGEST;
 
-typedef struct { uint8_t *out; int64_t nbytes; const uint8_t *seed, *key; int slot; } unif_ctx;
-static void *unif_worker(void *a) {
-    span_t *sp = a; unif_ctx *c = sp->ctx;
-    int64_t draws = (c->nbytes + DIGEST - 1) / DIGEST;
-    int64_t lo = draws * sp->t / sp->nt, hi = draws * (sp->t + 1) / sp->nt;
-    for (int64_t i = lo; i < hi; i++) {
+#pragma omp parallel for schedule(static) num_threads(nt)
+    for (int64_t i = 0; i < draws; i++) {
         uint8_t d[DIGEST];
-        draw_hash((uint32_t)i, c->seed, c->key, c->slot, d);
-        int64_t off = i * DIGEST, n = c->nbytes - off; if (n > DIGEST) n = DIGEST;
-        memcpy(c->out + off, d, (size_t)n);
+        draw_hash((uint32_t)i, seed, key, 0, d);
+        int64_t off = i * DIGEST, n = nbytes - off;
+        if (n > DIGEST) n = DIGEST;
+        // Transform each digest before writing it, avoiding a second pass over EAL/EBR.
+#ifdef HAVE_NEON
+        if (n == DIGEST) {
+            uint8x16_t mask = vdupq_n_u8(RANGE_MASK);
+            int8x16_t zero = vdupq_n_s8(ZERO_POINT);
+            uint8x16_t lo = vandq_u8(vld1q_u8(d), mask);
+            uint8x16_t hi = vandq_u8(vld1q_u8(d + 16), mask);
+            vst1q_s8(out + off, vsubq_s8(vreinterpretq_s8_u8(lo), zero));
+            vst1q_s8(out + off + 16, vsubq_s8(vreinterpretq_s8_u8(hi), zero));
+            continue;
+        }
+#endif
+        for (int64_t j = 0; j < n; j++) {
+            out[off + j] = (int8_t)((d[j] & RANGE_MASK) - ZERO_POINT);
+        }
     }
-    return 0;
-}
-/* raw draw bytes -> int8 in [-32,31] */
-typedef struct { uint8_t *raw; int8_t *out; int64_t n; } u2i_ctx;
-static void *u2i_worker(void *a) {
-    span_t *sp = a; u2i_ctx *c = sp->ctx;
-    int64_t lo = c->n * sp->t / sp->nt, hi = c->n * (sp->t + 1) / sp->nt;
-    for (int64_t i = lo; i < hi; i++) c->out[i] = (int8_t)((c->raw[i] & RANGE_MASK) - ZERO_POINT);
-    return 0;
+
+    prl_elapsed("prep.noise_seed", timing_start);
 }
 
-/* permutation pairs: line -> (first,second) over rank slots */
+// Each index pair is deterministically derived from the commitment; XOR ensures
+// the second rank index differs from the first without a rejection loop.
 static void perm_pairs(const uint8_t *seed, const uint8_t *key, int64_t lines, int rank,
                        uint16_t *first, uint16_t *second) {
+    double timing_start = prl_now_ms();
     int64_t draws = (lines * 4 + DIGEST - 1) / DIGEST;
     for (int64_t i = 0; i < draws; i++) {
         uint8_t d[DIGEST];
         draw_hash((uint32_t)i, seed, key, 1, d);
         for (int j = 0; j < 8; j++) {
-            int64_t line = i * 8 + j; if (line >= lines) break;
-            uint32_t u; memcpy(&u, d + j * 4, 4);
+            int64_t line = i * 8 + j;
+            if (line >= lines) break;
+            uint32_t u;
+            memcpy(&u, d + j * 4, 4);
             uint32_t f = u & (uint32_t)(rank - 1);
             uint32_t s = f ^ (1u + (uint32_t)(((uint64_t)(rank - 1) * u) >> 32));
-            first[line] = (uint16_t)f; second[line] = (uint16_t)s;
+            first[line] = (uint16_t)f;
+            second[line] = (uint16_t)s;
         }
     }
+
+    prl_elapsed("prep.permutation", timing_start);
 }
 
-/* ------------------------------------------------------- noised matrices */
+/* AArch64 TBL gathers 16 noise values directly from register tables.
+ * Keep the uint16_t permutation representation for ranks > 256 and use the
+ * low byte only in this rank-128 specialization (all indices are < 128).
+ * Two disjoint 64-byte lookups return zero outside their respective ranges.
+ */
+#if defined(__aarch64__)
+typedef struct { int8x16x4_t lo, hi; } noise128_t;
 
-/* A_noised[r,j] = A[r,j] + EAL[r,fA[j]] - EAL[r,sA[j]]   (rows split) */
-typedef struct { const int8_t *A, *EAL; int8_t *out; const uint16_t *f, *s;
-                 int64_t m, k; int R; } an_ctx;
-static void *an_worker(void *a) {
-    span_t *sp = a; an_ctx *c = sp->ctx;
-    int64_t lo = c->m * sp->t / sp->nt, hi = c->m * (sp->t + 1) / sp->nt;
-    for (int64_t r = lo; r < hi; r++) {
-        const int8_t *ar = c->A + r * c->k, *el = c->EAL + r * c->R;
-        int8_t *o = c->out + r * c->k;
-        for (int64_t j = 0; j < c->k; j++)
-            o[j] = (int8_t)(ar[j] + el[c->f[j]] - el[c->s[j]]);
+static inline noise128_t noise128_load(const int8_t *e) {
+    noise128_t t;
+    for (int i = 0; i < 4; ++i) {
+        t.lo.val[i] = vld1q_s8(e + i * 16);
+        t.hi.val[i] = vld1q_s8(e + 64 + i * 16);
     }
-    return 0;
+    return t;
 }
 
-/* Bt_noised[i,j] = B[j,i] + EBR[j,fB[i]] - EBR[j,sB[i]] ; blocked transpose */
-typedef struct { const int8_t *B, *EBR; int8_t *out; const uint16_t *f, *s;
-                 int64_t k, n; int R; } bn_ctx;
+static inline uint8x16_t indices16(const uint16_t *p) {
+    return vcombine_u8(vmovn_u16(vld1q_u16(p)),
+                       vmovn_u16(vld1q_u16(p + 8)));
+}
+
+static inline int8x16_t noise128_gather(noise128_t t, uint8x16_t idx) {
+    return vorrq_s8(vqtbl4q_s8(t.lo, idx),
+                    vqtbl4q_s8(t.hi, vsubq_u8(idx, vdupq_n_u8(64))));
+}
+
+static inline void noise128_apply(noise128_t t, const int8_t *src, int8_t *dst,
+                                  const uint16_t *f, const uint16_t *s,
+                                  int64_t count) {
+    int64_t j = 0;
+    for (; j + 16 <= count; j += 16) {
+        int8x16_t vf = noise128_gather(t, indices16(f + j));
+        int8x16_t vs = noise128_gather(t, indices16(s + j));
+        /* Non-saturating arithmetic preserves the original int8_t wrap. */
+        vst1q_s8(dst + j, vsubq_s8(vaddq_s8(vld1q_s8(src + j), vf), vs));
+    }
+    /* Callers use multiples of 16; retain a correct tail for other shapes. */
+    for (; j < count; ++j) {
+        uint8x16_t fi = vdupq_n_u8((uint8_t)f[j]);
+        uint8x16_t si = vdupq_n_u8((uint8_t)s[j]);
+        dst[j] = (int8_t)(src[j] + vgetq_lane_s8(noise128_gather(t, fi), 0)
+                                 - vgetq_lane_s8(noise128_gather(t, si), 0));
+    }
+}
+#endif
+
+static void compute_an(const int8_t *A, const int8_t *EAL, int8_t *out,
+                       const uint16_t *f, const uint16_t *s,
+                       int64_t m, int64_t k, int R, int nt) {
+    double timing_start = prl_now_ms();
+#pragma omp parallel for schedule(static) num_threads(nt)
+    for (int64_t r = 0; r < m; r++) {
+        const int8_t *ar = A + r * k, *el = EAL + r * R;
+        int8_t *o = out + r * k;
+#if defined(__aarch64__)
+        noise128_apply(noise128_load(el), ar, o, f, s, k);
+#else
+        int64_t j = 0;
+#ifdef HAVE_NEON
+        int8_t efb[16], esb[16];
+        for (; j + 16 <= k; j += 16) {
+            for (int t = 0; t < 16; t++) {
+                efb[t] = el[f[j + t]];
+                esb[t] = el[s[j + t]];
+            }
+            int8x16_t va = vld1q_s8(ar + j);
+            int8x16_t vf = vld1q_s8(efb);
+            int8x16_t vs = vld1q_s8(esb);
+            int8x16_t vo = vsubq_s8(vaddq_s8(va, vf), vs);
+            vst1q_s8(o + j, vo);
+        }
+#endif
+        for (; j < k; j++)
+            o[j] = (int8_t)(ar[j] + el[f[j]] - el[s[j]]);
+#endif
+    }
+
+    prl_elapsed("prep.apply_A", timing_start);
+}
+
 #define TB 64
-static void *bn_worker(void *a) {
-    span_t *sp = a; bn_ctx *c = sp->ctx;
-    int64_t kb = (c->k + TB - 1) / TB;
-    int64_t lo = kb * sp->t / sp->nt, hi = kb * (sp->t + 1) / sp->nt;
-    for (int64_t ib = lo; ib < hi; ib++) {
-        int64_t i0 = ib * TB, i1 = i0 + TB > c->k ? c->k : i0 + TB;
-        for (int64_t j0 = 0; j0 < c->n; j0 += TB) {
-            int64_t j1 = j0 + TB > c->n ? c->n : j0 + TB;
-            for (int64_t j = j0; j < j1; j++) {
-                const int8_t *bj = c->B + j * c->k, *ej = c->EBR + j * c->R;
-                for (int64_t i = i0; i < i1; i++)
-                    c->out[i * c->n + j] = (int8_t)(bj[i] + ej[c->f[i]] - ej[c->s[i]]);
+static void compute_bn(const int8_t *B, const int8_t *EBR, int8_t *out,
+                       const uint16_t *f, const uint16_t *s,
+                       int64_t k, int64_t n, int R, int nt) {
+    double timing_start = prl_now_ms();
+    int64_t kb = (k + TB - 1) / TB;
+#pragma omp parallel for schedule(static) num_threads(nt)
+    for (int64_t ib = 0; ib < kb; ib++) {
+        int64_t i0 = ib * TB, ni = k - i0 < TB ? k - i0 : TB;
+        int8_t tile[TB][TB];
+        for (int64_t j0 = 0; j0 < n; j0 += TB) {
+            int64_t nj = n - j0 < TB ? n - j0 : TB;
+            for (int64_t j = 0; j < nj; ++j) {
+                const int8_t *bj = B + (j0 + j) * k + i0;
+                const int8_t *ej = EBR + (j0 + j) * R;
+#if defined(__aarch64__)
+                noise128_apply(noise128_load(ej), bj, tile[j], f + i0, s + i0, ni);
+#else
+                for (int64_t i = 0; i < ni; ++i)
+                    tile[j][i] = (int8_t)(bj[i] + ej[f[i0 + i]] - ej[s[i0 + i]]);
+#endif
+            }
+            /* Transpose in a bounded per-thread tile; GM stores now follow
+             * adjacent columns instead of repeatedly writing n bytes apart. */
+            for (int64_t i = 0; i < ni; ++i) {
+                int8_t *dst = out + (i0 + i) * n + j0;
+                for (int64_t j = 0; j < nj; ++j) dst[j] = tile[j][i];
             }
         }
     }
-    return 0;
+
+    prl_elapsed("prep.apply_B_transpose", timing_start);
 }
 
-/* FUSED noise+transpose+PACK — write the kernel's bt layout directly.
- *   bt[((jp*NFOLD+p)*BN + m)*MM_K + ki] = Bt_noised[row=p*MM_K+ki, col=jp*BN+m]
- * with MM_K = R(=rank), MM_M = BN = 64, NFOLD = k/R, nbands = n/64.
- * Btn[i*n+j] = B[j,i] + EBR[j,f[i]] - EBR[j,s[i]] from bn_worker. */
 #define BN_PACK 64
-typedef struct { const int8_t *B, *EBR; int8_t *bt; const uint16_t *f, *s;
-                 int64_t k, n; int R; } bnp_ctx;
-static void *bn_pack_worker(void *a) {
-    span_t *sp = a; bnp_ctx *c = sp->ctx;
-    int64_t nbands = c->n / BN_PACK, NFOLD = c->k / c->R;
-    int64_t lo = nbands * sp->t / sp->nt, hi = nbands * (sp->t + 1) / sp->nt;
-    for (int64_t jp = lo; jp < hi; jp++)
-        for (int64_t p = 0; p < NFOLD; p++)
-            for (int64_t m = 0; m < BN_PACK; m++) {
-                int64_t col = jp * BN_PACK + m;
-                const int8_t *bcol = c->B + col * c->k;     /* B[col, :]  (row-major [n,k]) */
-                const int8_t *ecol = c->EBR + col * c->R;   /* EBR[col, :] */
-                int8_t *dst = c->bt + ((jp * NFOLD + p) * BN_PACK + m) * c->R;
-                for (int64_t ki = 0; ki < c->R; ki++) {
-                    int64_t row = p * c->R + ki;
-                    dst[ki] = (int8_t)(bcol[row] + ecol[c->f[row]] - ecol[c->s[row]]);
+// Pack the noised B matrix by 64-column band and rank-sized fold, matching the
+// NPU cube kernel's [band][fold][column][k] access order.
+static void compute_bn_pack(const int8_t *B, const int8_t *EBR, int8_t *bt,
+                            const uint16_t *f, const uint16_t *s,
+                            int64_t k, int64_t n, int R, int nt) {
+    double timing_start = prl_now_ms();
+    int64_t nbands = n / BN_PACK, NFOLD = k / R;
+#pragma omp parallel for schedule(static) num_threads(nt)
+    for (int64_t jp = 0; jp < nbands; jp++) {
+        /* One column at a time reuses its noise row across all folds and
+         * reads its source B column sequentially. The packed offset is unchanged. */
+        for (int64_t col_in_band = 0; col_in_band < BN_PACK; col_in_band++) {
+            int64_t col = jp * BN_PACK + col_in_band;
+            const int8_t *bcol = B + col * k;
+            const int8_t *ecol = EBR + col * R;
+#if defined(__aarch64__)
+            noise128_t t = noise128_load(ecol);
+            for (int64_t p = 0; p < NFOLD; ++p) {
+                int64_t row = p * R;
+                int8_t *dst = bt + ((jp * NFOLD + p) * BN_PACK + col_in_band) * R;
+                noise128_apply(t, bcol + row, dst, f + row, s + row, R);
+            }
+#else
+            for (int64_t p = 0; p < NFOLD; ++p) {
+                int8_t *dst = bt + ((jp * NFOLD + p) * BN_PACK + col_in_band) * R;
+                for (int64_t ki = 0; ki < R; ++ki) {
+                    int64_t row = p * R + ki;
+                    dst[ki] = (int8_t)(bcol[row] + ecol[f[row]] - ecol[s[row]]);
                 }
             }
-    return 0;
+#endif
+        }
+    }
+
+    prl_elapsed("prep.apply_B_pack", timing_start);
 }
 
-/* ---------------------------------------------------------------- driver */
-
-static void unif_int8(const uint8_t *seed, const uint8_t *key, int64_t n, int8_t *out,
-                      int nt, span_t *sp) {
-    unif_ctx uc = { (uint8_t *)out, n, seed, key, 0 };
-    /* draw in place then remap (draw bytes == out bytes count) */
-    run_threads(nt, unif_worker, &uc, sp);
-    u2i_ctx ic = { (uint8_t *)out, out, n };
-    run_threads(nt, u2i_worker, &ic, sp);
-}
-
-/* pack=0: Bt_out receives Bt_noised[k,n] (repacked later by the kernel's set_b).
- * pack=1: Bt_out receives the kernel's PACKED bt layout directly. Identical otherwise. */
 static int prep_from_ab_impl(const int8_t *A, const int8_t *B, const uint8_t *key,
                  int64_t m, int64_t n, int64_t k, int R,
                  int8_t *A_noised, int8_t *Bt_out,
                  int8_t *EAL, int8_t *EBR,
                  uint8_t *rootA, uint8_t *rootB,
                  uint8_t *commitA, uint8_t *commitB,
-                 int nt, int pack) {
-    static span_t sp[256];
+                 int nt, int pack, int cert_mode) {
     if ((m * k) % 1024 || (n * k) % 1024) return -1;
-    mk_ctx ma = { A, m * k, key, rootA }, mb = { B, n * k, key, rootB };
-    pthread_t t1, t2;
-    pthread_create(&t1, 0, mk_worker, &ma);
-    pthread_create(&t2, 0, mk_worker, &mb);
-    pthread_join(t1, 0); pthread_join(t2, 0);
 
+    long timing_round = prl_round_id();
+    int timing_slot = prl_slot_id();
+#pragma omp parallel sections num_threads(2)
+    {
+#pragma omp section
+        { prl_context(timing_round, -1, timing_slot); calc_mk(A, m * k, key, rootA, "prep.root_A"); }
+#pragma omp section
+        { prl_context(timing_round, -1, timing_slot); calc_mk(B, n * k, key, rootB, "prep.root_B"); }
+    }
+
+    uint8_t saltedA[32], saltedB[32];
+    salt_roots(cert_mode, rootA, rootB, (uint32_t)m, (uint32_t)n, saltedA, saltedB);
+
+    // B commits first; A commits to B, so the two noise seeds are linked.
     blake3_hasher h;
     blake3_hasher_init(&h); blake3_hasher_update(&h, key, 32);
-    blake3_hasher_update(&h, rootB, 32); blake3_hasher_finalize(&h, commitB, 32);
+    blake3_hasher_update(&h, saltedB, 32); blake3_hasher_finalize(&h, commitB, 32);
     blake3_hasher_init(&h); blake3_hasher_update(&h, commitB, 32);
-    blake3_hasher_update(&h, rootA, 32); blake3_hasher_finalize(&h, commitA, 32);
+    blake3_hasher_update(&h, saltedA, 32); blake3_hasher_finalize(&h, commitA, 32);
 
     static const uint8_t seedA[32] = "A_tensor", seedB[32] = "B_tensor";
-    unif_int8(seedA, commitA, m * R, EAL, nt, sp);
-    unif_int8(seedB, commitB, n * R, EBR, nt, sp);
+    unif_int8(seedA, commitA, m * R, EAL, nt);
+    unif_int8(seedB, commitB, n * R, EBR, nt);
 
-    static uint16_t fA[1 << 16], sA[1 << 16], fB[1 << 16], sB[1 << 16];
     if (k > (1 << 16)) return -2;
+    uint16_t *pairs = malloc((size_t)k * 4 * sizeof(*pairs));
+    if (!pairs) return -3;
+    uint16_t *fA = pairs, *sA = fA + k, *fB = sA + k, *sB = fB + k;
     perm_pairs(seedA, commitA, k, R, fA, sA);
     perm_pairs(seedB, commitB, k, R, fB, sB);
 
-    an_ctx ac = { A, EAL, A_noised, fA, sA, m, k, R };
-    run_threads(nt, an_worker, &ac, sp);
+    compute_an(A, EAL, A_noised, fA, sA, m, k, R, nt);
     if (pack) {
-        bnp_ctx bp = { B, EBR, Bt_out, fB, sB, k, n, R };
-        run_threads(nt, bn_pack_worker, &bp, sp);    /* fused transpose+pack -> kernel bt layout */
+        compute_bn_pack(B, EBR, Bt_out, fB, sB, k, n, R, nt);
     } else {
-        bn_ctx bc = { B, EBR, Bt_out, fB, sB, k, n, R };
-        run_threads(nt, bn_worker, &bc, sp);
+        compute_bn(B, EBR, Bt_out, fB, sB, k, n, R, nt);
     }
+    free(pairs);
     return 0;
 }
 
 int prep_from_ab(const int8_t *A, const int8_t *B, const uint8_t *key,
                  int64_t m, int64_t n, int64_t k, int R,
                  int8_t *A_noised, int8_t *Bt_noised, int8_t *EAL, int8_t *EBR,
-                 uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB, int nt) {
+                 uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB,
+                 int nt, int cert_version) {
+    int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
     return prep_from_ab_impl(A, B, key, m, n, k, R, A_noised, Bt_noised,
-                             EAL, EBR, rootA, rootB, commitA, commitB, nt, 0);
+                             EAL, EBR, rootA, rootB, commitA, commitB, nt, 0, cert_mode);
 }
 
 static int prep_random_impl(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *key,
-                int64_t m, int64_t n, int64_t k, int R,
-                int8_t *A_noised, int8_t *Bt_out, int8_t *EAL, int8_t *EBR,
-                uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB,
-                int nt, int pack) {
-    static span_t sp[256];
-    fill_ctx fa = { A, m * k, seed }, fb = { B, n * k, seed ^ 0xB0B0B0B0ULL };
-    run_threads(nt, fill_worker, &fa, sp);
-    run_threads(nt, fill_worker, &fb, sp);
+                            int64_t m, int64_t n, int64_t k, int R,
+                            int8_t *A_noised, int8_t *Bt_out, int8_t *EAL, int8_t *EBR,
+                            uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB,
+                            int nt, int pack, int cert_mode) {
+    fill_buf(A, m * k, seed, nt);
+    fill_buf(B, n * k, seed ^ 0xB0B0B0B0ULL, nt);
     return prep_from_ab_impl(A, B, key, m, n, k, R, A_noised, Bt_out,
-                             EAL, EBR, rootA, rootB, commitA, commitB, nt, pack);
+                             EAL, EBR, rootA, rootB, commitA, commitB, nt, pack, cert_mode);
 }
 
 int prep_random(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *key,
                 int64_t m, int64_t n, int64_t k, int R,
                 int8_t *A_noised, int8_t *Bt_noised, int8_t *EAL, int8_t *EBR,
-                uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB, int nt) {
+                uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB,
+                int nt, int cert_version) {
+    int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
     return prep_random_impl(seed, A, B, key, m, n, k, R, A_noised, Bt_noised,
-                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 0);
+                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 0, cert_mode);
 }
-/* same as prep_random but Bt_noised receives the kernel's PACKED bt layout (skip repackBT). */
+
 int prep_random_bt(uint64_t seed, int8_t *A, int8_t *B, const uint8_t *key,
                 int64_t m, int64_t n, int64_t k, int R,
                 int8_t *A_noised, int8_t *bt_packed, int8_t *EAL, int8_t *EBR,
-                uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB, int nt) {
+                uint8_t *rootA, uint8_t *rootB, uint8_t *commitA, uint8_t *commitB,
+                int nt, int cert_version) {
+    int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
     return prep_random_impl(seed, A, B, key, m, n, k, R, A_noised, bt_packed,
-                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 1);
+                            EAL, EBR, rootA, rootB, commitA, commitB, nt, 1, cert_mode);
 }
 
-/* REUSE-B split. B-side (commitB, EBR, packed bt) depends only on (B,key) — fixed within
- * a job, so it is cached and the per-iter prep drops to the A-side.
- * prep_b_side: fill random B, rootB, commitB=blake3(key||rootB), EBR, perm fB/sB, pack -> bt.
- * prep_a_side: fill random A, rootA, commitA=blake3(commitB||rootA) [= PoW key], EAL, perm fA/sA,
- *              noised_A -> An. Different A -> different transcript -> a valid DISTINCT share. */
 int prep_b_side(uint64_t seed, int8_t *B, const uint8_t *key,
                 int64_t n, int64_t k, int R,
-                int8_t *bt_packed, int8_t *EBR, uint8_t *rootB, uint8_t *commitB, int nt) {
-    static span_t sp[256];
+                int8_t *bt_packed, int8_t *EBR, uint8_t *rootB, uint8_t *commitB,
+                int nt, int cert_version) {
     if ((n * k) % 1024) return -1;
     if (k > (1 << 16)) return -2;
-    fill_ctx fb = { B, n * k, seed };
-    run_threads(nt, fill_worker, &fb, sp);
-    mk_ctx mb = { B, n * k, key, rootB };
-    pthread_t t; pthread_create(&t, 0, mk_worker, &mb); pthread_join(t, 0);
+
+    fill_buf(B, n * k, seed, nt);
+    calc_mk(B, n * k, key, rootB, "prep.root_B");
+
+    int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
+    uint8_t saltedB[32];
+    if (cert_mode == CERT_SALTED) bind_root(rootB, (uint32_t)n, SEED_SALT_B, saltedB);
+    else memcpy(saltedB, rootB, 32);
+
     blake3_hasher h;
     blake3_hasher_init(&h); blake3_hasher_update(&h, key, 32);
-    blake3_hasher_update(&h, rootB, 32); blake3_hasher_finalize(&h, commitB, 32);
+    blake3_hasher_update(&h, saltedB, 32); blake3_hasher_finalize(&h, commitB, 32);
+
     static const uint8_t seedB[32] = "B_tensor";
-    unif_int8(seedB, commitB, n * R, EBR, nt, sp);
-    static uint16_t fB[1 << 16], sB[1 << 16];
+    unif_int8(seedB, commitB, n * R, EBR, nt);
+
+    uint16_t *fB = malloc((size_t)k * 2 * sizeof(*fB));
+    if (!fB) return -3;
+    uint16_t *sB = fB + k;
     perm_pairs(seedB, commitB, k, R, fB, sB);
-    bnp_ctx bp = { B, EBR, bt_packed, fB, sB, k, n, R };
-    run_threads(nt, bn_pack_worker, &bp, sp);
+
+    compute_bn_pack(B, EBR, bt_packed, fB, sB, k, n, R, nt);
+    free(fB);
     return 0;
 }
 
 int prep_a_side(uint64_t seed, int8_t *A, const uint8_t *key, const uint8_t *commitB,
                 int64_t m, int64_t k, int R,
-                int8_t *A_noised, int8_t *EAL, uint8_t *rootA, uint8_t *commitA, int nt) {
-    static span_t sp[256];
+                int8_t *A_noised, int8_t *EAL, uint8_t *rootA, uint8_t *commitA,
+                int nt, int cert_version) {
     if ((m * k) % 1024) return -1;
     if (k > (1 << 16)) return -2;
-    fill_ctx fa = { A, m * k, seed };
-    run_threads(nt, fill_worker, &fa, sp);
-    mk_ctx ma = { A, m * k, key, rootA };
-    pthread_t t; pthread_create(&t, 0, mk_worker, &ma); pthread_join(t, 0);
+
+    fill_buf(A, m * k, seed, nt);
+    calc_mk(A, m * k, key, rootA, "prep.root_A");
+
+    int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
+    uint8_t saltedA[32];
+    if (cert_mode == CERT_SALTED) bind_root(rootA, (uint32_t)m, SEED_SALT_A, saltedA);
+    else memcpy(saltedA, rootA, 32);
+
     blake3_hasher h;
     blake3_hasher_init(&h); blake3_hasher_update(&h, commitB, 32);
-    blake3_hasher_update(&h, rootA, 32); blake3_hasher_finalize(&h, commitA, 32);
+    blake3_hasher_update(&h, saltedA, 32); blake3_hasher_finalize(&h, commitA, 32);
+
     static const uint8_t seedA[32] = "A_tensor";
-    unif_int8(seedA, commitA, m * R, EAL, nt, sp);
-    static uint16_t fA[1 << 16], sA[1 << 16];
+    unif_int8(seedA, commitA, m * R, EAL, nt);
+
+    uint16_t *fA = malloc((size_t)k * 2 * sizeof(*fA));
+    if (!fA) return -3;
+    uint16_t *sA = fA + k;
     perm_pairs(seedA, commitA, k, R, fA, sA);
-    an_ctx ac = { A, EAL, A_noised, fA, sA, m, k, R };
-    run_threads(nt, an_worker, &ac, sp);
+
+    compute_an(A, EAL, A_noised, fA, sA, m, k, R, nt);
+    free(fA);
     return 0;
 }

@@ -9,14 +9,8 @@ set(PEARL_PIPE_DEPTH "4" CACHE STRING "host strip queue depth")
 set(BUFS "4" CACHE STRING "slot ping-pong depth")
 set(BACKOFF "500" CACHE STRING "spin backoff iters")
 set(VEC2X "2" CACHE STRING "vec consumers per cube producer")
-add_library(pearl_hlc2 SHARED pearl_hlc2_cube.asc pearl_hlc2_vec.asc prl_timing.cpp)
-# Keep CANN's ASC link rule for this mixed ASC/CXX target. Without an explicit
-# linker language, CMake may select CXX after adding prl_timing.cpp and omit
-# ASC's CANN library paths / shared-library flags.
-set_target_properties(pearl_hlc2 PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
-    LINKER_LANGUAGE ASC
-)
+add_library(pearl_hlc2 SHARED pearl_hlc2_cube.asc pearl_hlc2_vec.asc)
+set_target_properties(pearl_hlc2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(pearl_hlc2 PRIVATE tiling_api register platform m dl pthread)
 target_compile_options(pearl_hlc2 PRIVATE
     $<$<COMPILE_LANGUAGE:ASC>:--npu-arch=${CMAKE_ASC_ARCHITECTURES}>

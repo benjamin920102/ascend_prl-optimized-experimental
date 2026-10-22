@@ -1,7 +1,6 @@
 /* Kryptex v2 expects base64(gzip(bincode)), not gzip of the base64 text.
  * Declare the minimal zlib ABI locally so the runtime library can be linked.
  */
-#include "prl_timing.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -69,22 +68,13 @@ static ssize_t b64_encode(const uint8_t *in, size_t n, char *out, size_t cap) {
 /* Encode once at the wire boundary. Gzip consumes the raw bincode bytes. */
 ssize_t encode_proof_b64(const uint8_t *bin, size_t bin_len, int gzip,
                          uint8_t *out, size_t cap) {
-    double encode_start = prl_now_ms();
-    if (!gzip) {
-        ssize_t n = b64_encode(bin, bin_len, (char *)out, cap);
-        prl_elapsed("proof.base64", encode_start);
-        return n;
-    }
+    if (!gzip) return b64_encode(bin, bin_len, (char *)out, cap);
     size_t gz_cap = bin_len + bin_len / 2 + 256;
     uint8_t *gz = malloc(gz_cap);
     if (!gz) return -1;
-    double gz_start = prl_now_ms();
     ssize_t gn = gz_compress(bin, bin_len, gz, gz_cap);
-    prl_elapsed("proof.gzip", gz_start);
     if (gn < 0) { free(gz); return -1; }
-    double b64_start = prl_now_ms();
     ssize_t on = b64_encode(gz, (size_t)gn, (char *)out, cap);
-    prl_elapsed("proof.base64", b64_start);
     free(gz);
     return on;
 }

@@ -1,4 +1,3 @@
-#include "prl_timing.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,7 +90,6 @@ static void draw_hash(uint32_t idx, const uint8_t *seed, const uint8_t *key,
  * PRL_ZERO_SEED=0: legacy uniform random fill (incompressible).
  */
 static void fill_buf(int8_t *buf, int64_t total, uint64_t seed, int nt) {
-    double timing_start = prl_now_ms();
     const char *zs = getenv("PRL_ZERO_SEED");
     if (zs && zs[0] == '0' && zs[1] == '\0') {
 #pragma omp parallel num_threads(nt)
@@ -108,7 +106,6 @@ static void fill_buf(int8_t *buf, int64_t total, uint64_t seed, int nt) {
                     buf[i++] = (int8_t)((uint8_t)v % 127) - 63;
             }
         }
-        prl_elapsed("prep.fill", timing_start);
         return;
     }
     memset(buf, 0, (size_t)total);
@@ -118,12 +115,9 @@ static void fill_buf(int8_t *buf, int64_t total, uint64_t seed, int nt) {
             buf[i] = (int8_t)(s & 0xff);
     }
     (void)nt;
-
-    prl_elapsed("prep.fill", timing_start);
 }
 
-static void calc_mk(const int8_t *buf, int64_t len, const uint8_t *key, uint8_t *root, const char *metric) {
-    double timing_start = prl_now_ms();
+static void calc_mk(const int8_t *buf, int64_t len, const uint8_t *key, uint8_t *root) {
     blake3_hasher h;
     blake3_hasher_init_keyed(&h, key);
 #if defined(BLAKE3_USE_TBB)
@@ -132,12 +126,9 @@ static void calc_mk(const int8_t *buf, int64_t len, const uint8_t *key, uint8_t 
     blake3_hasher_update(&h, buf, (size_t)len);
 #endif
     blake3_hasher_finalize(&h, root, DIGEST);
-
-    prl_elapsed(metric, timing_start);
 }
 
 static void unif_int8(const uint8_t *seed, const uint8_t *key, int64_t nbytes, int8_t *out, int nt) {
-    double timing_start = prl_now_ms();
     int64_t draws = (nbytes + DIGEST - 1) / DIGEST;
 
 #pragma omp parallel for schedule(static) num_threads(nt)
@@ -162,15 +153,12 @@ static void unif_int8(const uint8_t *seed, const uint8_t *key, int64_t nbytes, i
             out[off + j] = (int8_t)((d[j] & RANGE_MASK) - ZERO_POINT);
         }
     }
-
-    prl_elapsed("prep.noise_seed", timing_start);
 }
 
 // Each index pair is deterministically derived from the commitment; XOR ensures
 // the second rank index differs from the first without a rejection loop.
 static void perm_pairs(const uint8_t *seed, const uint8_t *key, int64_t lines, int rank,
                        uint16_t *first, uint16_t *second) {
-    double timing_start = prl_now_ms();
     int64_t draws = (lines * 4 + DIGEST - 1) / DIGEST;
     for (int64_t i = 0; i < draws; i++) {
         uint8_t d[DIGEST];
@@ -186,8 +174,6 @@ static void perm_pairs(const uint8_t *seed, const uint8_t *key, int64_t lines, i
             second[line] = (uint16_t)s;
         }
     }
-
-    prl_elapsed("prep.permutation", timing_start);
 }
 
 /* AArch64 TBL gathers 16 noise values directly from register tables.
@@ -240,7 +226,6 @@ static inline void noise128_apply(noise128_t t, const int8_t *src, int8_t *dst,
 static void compute_an(const int8_t *A, const int8_t *EAL, int8_t *out,
                        const uint16_t *f, const uint16_t *s,
                        int64_t m, int64_t k, int R, int nt) {
-    double timing_start = prl_now_ms();
 #pragma omp parallel for schedule(static) num_threads(nt)
     for (int64_t r = 0; r < m; r++) {
         const int8_t *ar = A + r * k, *el = EAL + r * R;
@@ -267,15 +252,12 @@ static void compute_an(const int8_t *A, const int8_t *EAL, int8_t *out,
             o[j] = (int8_t)(ar[j] + el[f[j]] - el[s[j]]);
 #endif
     }
-
-    prl_elapsed("prep.apply_A", timing_start);
 }
 
 #define TB 64
 static void compute_bn(const int8_t *B, const int8_t *EBR, int8_t *out,
                        const uint16_t *f, const uint16_t *s,
                        int64_t k, int64_t n, int R, int nt) {
-    double timing_start = prl_now_ms();
     int64_t kb = (k + TB - 1) / TB;
 #pragma omp parallel for schedule(static) num_threads(nt)
     for (int64_t ib = 0; ib < kb; ib++) {
@@ -301,8 +283,6 @@ static void compute_bn(const int8_t *B, const int8_t *EBR, int8_t *out,
             }
         }
     }
-
-    prl_elapsed("prep.apply_B_transpose", timing_start);
 }
 
 #define BN_PACK 64
@@ -311,7 +291,6 @@ static void compute_bn(const int8_t *B, const int8_t *EBR, int8_t *out,
 static void compute_bn_pack(const int8_t *B, const int8_t *EBR, int8_t *bt,
                             const uint16_t *f, const uint16_t *s,
                             int64_t k, int64_t n, int R, int nt) {
-    double timing_start = prl_now_ms();
     int64_t nbands = n / BN_PACK, NFOLD = k / R;
 #pragma omp parallel for schedule(static) num_threads(nt)
     for (int64_t jp = 0; jp < nbands; jp++) {
@@ -339,8 +318,6 @@ static void compute_bn_pack(const int8_t *B, const int8_t *EBR, int8_t *bt,
 #endif
         }
     }
-
-    prl_elapsed("prep.apply_B_pack", timing_start);
 }
 
 static int prep_from_ab_impl(const int8_t *A, const int8_t *B, const uint8_t *key,
@@ -352,14 +329,12 @@ static int prep_from_ab_impl(const int8_t *A, const int8_t *B, const uint8_t *ke
                  int nt, int pack, int cert_mode) {
     if ((m * k) % 1024 || (n * k) % 1024) return -1;
 
-    long timing_round = prl_round_id();
-    int timing_slot = prl_slot_id();
 #pragma omp parallel sections num_threads(2)
     {
 #pragma omp section
-        { prl_context(timing_round, -1, timing_slot); calc_mk(A, m * k, key, rootA, "prep.root_A"); }
+        calc_mk(A, m * k, key, rootA);
 #pragma omp section
-        { prl_context(timing_round, -1, timing_slot); calc_mk(B, n * k, key, rootB, "prep.root_B"); }
+        calc_mk(B, n * k, key, rootB);
     }
 
     uint8_t saltedA[32], saltedB[32];
@@ -442,7 +417,7 @@ int prep_b_side(uint64_t seed, int8_t *B, const uint8_t *key,
     if (k > (1 << 16)) return -2;
 
     fill_buf(B, n * k, seed, nt);
-    calc_mk(B, n * k, key, rootB, "prep.root_B");
+    calc_mk(B, n * k, key, rootB);
 
     int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
     uint8_t saltedB[32];
@@ -474,7 +449,7 @@ int prep_a_side(uint64_t seed, int8_t *A, const uint8_t *key, const uint8_t *com
     if (k > (1 << 16)) return -2;
 
     fill_buf(A, m * k, seed, nt);
-    calc_mk(A, m * k, key, rootA, "prep.root_A");
+    calc_mk(A, m * k, key, rootA);
 
     int cert_mode = cert_version >= 3 ? CERT_SALTED : CERT_LEGACY;
     uint8_t saltedA[32];

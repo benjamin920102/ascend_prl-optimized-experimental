@@ -1,5 +1,4 @@
 /* Submit single strips to the NPU; the vector kernel hashes and checks tile hits. */
-#include "prl_timing.h"
 #include <stdint.h>
 #include <string.h>
 #include "pearl_pipeline.h"
@@ -27,10 +26,8 @@ int scan_full(const int8_t *a_noised, int num_strips,
 
     uint32_t key_u32[8];
     memcpy(key_u32, key, 32);
-    double setup_start = prl_now_ms();
     pearl_set_key_target(key_u32, target);
     pearl_set_nhi(n_hi);
-    prl_elapsed("scan.key_target_submit", setup_start);
 
     // Prime only as many strips as the host API has independent buffer slots.
     int submitted = 0;
@@ -39,32 +36,25 @@ int scan_full(const int8_t *a_noised, int num_strips,
         ++submitted;
     }
     for (int completed = 0; completed < num_strips; ++completed) {
-        double wait_start = prl_now_ms();
         pearl_strip_wait_done();
-        prl_elapsed("scan.wait_done_host", wait_start);
 
-        // Consume the completed slot BEFORE a refill can overwrite its pinned result.
-        int h_strip, h_tile;
-        double reduce_start = prl_now_ms();
-        int hit = pearl_get_hit_result(&h_strip, &h_tile);
-        prl_elapsed("scan.reduce_hits_cpu", reduce_start);
-        if (hit) {
-            *hit_strip = h_strip;
-            *hit_tile = h_tile;
-            // Drain every queued strip before the next scan changes keys/B/flags.
-            double drain_start = prl_now_ms();
-            for (int pending = completed + 1; pending < submitted; ++pending)
-                pearl_strip_wait_done();
-            prl_record("scan.hit_drain", prl_now_ms()-drain_start, submitted-completed-1);
-            prl_record("scan.completed_strips", 0, submitted);
-            return 1;
-        }
+        // Wait saved a host-owned result snapshot. Refill the freed slot first,
+        // allowing NPU execution to overlap CPU reduction of the completed strip.
         if (submitted < num_strips) {
             pearl_strip_submit_fast(a_noised + (size_t)submitted * R * K);
             ++submitted;
         }
+
+        int h_strip, h_tile;
+        if (pearl_get_hit_result(&h_strip, &h_tile)) {
+            *hit_strip = h_strip;
+            *hit_tile = h_tile;
+            // Drain every queued strip before the next scan changes keys/B/flags.
+            for (int pending = completed + 1; pending < submitted; ++pending)
+                pearl_strip_wait_done();
+            return 1;
+        }
     }
 
-    prl_record("scan.completed_strips", 0, submitted);
     return 0;
 }

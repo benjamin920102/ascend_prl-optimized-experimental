@@ -1,5 +1,3 @@
-> Timing test edition: see [TIMING_zh.md](TIMING_zh.md) for build, run, CSV fields and measurement limitations.
-
 # `ascend_prl` — 全球首个昇腾 NPU 加密货币矿工
 
 [English](README.md) | **中文**
@@ -9,7 +7,7 @@
 
 > **免责声明：** 仅供学习研究之用。请仅在你拥有授权的硬件上运行。
 
-每次算子提交固定處理一個 strip，主機端保留兩槽非同步流水線。Vector partial 輸入使用 TQue 兩塊緩衝，預載下一個 fold。
+每次算子提交固定處理一個 strip，主機端使用可設定深度的非同步 strip 佇列（`PIPE_DEPTH`，預設 4）。Vector partial 輸入使用 TQue 兩塊緩衝，預載下一個 fold。
 
 ## 快速开始
 

@@ -2,7 +2,6 @@
  * Usage: ascend_prl_<pool> <devid> <worker> <host> <port> <address> <password>
  */
 #include "pools/pool.h"
-#include "prl_timing.h"
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -81,8 +80,6 @@ typedef struct {
     int cert_version;
     int slot;
     int proof_busy, hit_strip, hit_tile;
-    long timing_round, timing_next_round;
-    double timing_enqueued;
 } bundle_t;
 static void bundle_key(bundle_t *b);
 static _Atomic long g_last_scan_ms = 0, g_last_prep_ms = 0;
@@ -96,11 +93,9 @@ static int proof_head, proof_count, proof_active, proof_stop;
 static pthread_t proof_thread;
 static const char *submit_addr, *submit_worker;
 static void proof_drain(void) {
-    double timing_start = prl_now_ms();
     pthread_mutex_lock(&proof_mu);
     while (proof_count || proof_active) pthread_cond_wait(&proof_cv, &proof_mu);
     pthread_mutex_unlock(&proof_mu);
-    prl_elapsed("proof.drain_wait", timing_start);
 }
 static void proof_wait_bundle(bundle_t *b) {
     pthread_mutex_lock(&proof_mu);
@@ -117,11 +112,8 @@ static void prep_check(int rc) {
     if (rc) { fprintf(stderr, "[!] matrix preparation failed: %d\n", rc); exit(2); }
 }
 static void proof_enqueue(bundle_t *b, int hs, int ht) {
-    double timing_start = prl_now_ms();
     pthread_mutex_lock(&proof_mu);
     while (proof_count == 2) pthread_cond_wait(&proof_cv, &proof_mu);
-    prl_elapsed("proof.enqueue_wait", timing_start);
-    b->timing_enqueued = prl_now_ms();
     b->hit_strip = hs; b->hit_tile = ht; b->proof_busy = 1;
     proof_queue[(proof_head + proof_count++) % 2] = b;
     pthread_cond_broadcast(&proof_cv);
@@ -158,24 +150,17 @@ static int ensure_bside(long N, long Kc, int rank, int prep_n) {
     bs.cert_version = cert_version;
     hash_key(hdr, hl, (size_t)Kc, (size_t)rank, mp.rows, mp.nrows, mp.cols, mp.ncols, bs.key);
     uint64_t seed = ((uint64_t)rand() << 32) ^ (uint64_t)time(0) ^ 0xB5B5ULL;
-    double refresh_start = prl_now_ms();
     prep_check(prep_b_side(seed, bs.B, bs.key, N, Kc, rank, bs.bt, bs.EBR, bs.rootB, bs.commitB, prep_n, cert_version));
     if (pearl_set_bt_slot)     pearl_set_bt_slot(bs.bt, 0);
     else if (pearl_set_b_slot) pearl_set_b_slot(bs.bt, (int)N, 0);
-    prl_elapsed("reuse_B.refresh_and_upload", refresh_start);
     bs.slot = 0; bs.valid = 1; bs.since = 0;
     return 1;
 }
 
 static void *prep_worker(void *p) {
     bundle_t *b = p;
-    prl_context(b->timing_next_round, -1, b->slot);
-    double timing_total = prl_now_ms();
     double wait_start = monotonic_ms();
     proof_wait_bundle(b);
-    b->timing_round = b->timing_next_round;
-    prl_elapsed("prep.bundle_hold_wait", wait_start);
-    double delay_start = prl_now_ms();
     if (getenv("PRL_LOOP_PROF")) fprintf(stderr, "[prepprof] proof-hold=%.1fms\n", monotonic_ms()-wait_start);
     if (g_reuse_b) {
         int prep_n = getenv("PRL_PREP_THREADS") ? atoi(getenv("PRL_PREP_THREADS")) : 64;
@@ -188,8 +173,6 @@ static void *prep_worker(void *p) {
                     b->An, g_EAL, b->roots[0], b->roots[2], prep_n, bs.cert_version));
         clock_gettime(CLOCK_MONOTONIC, &pb);
         g_last_prep_ms = (pb.tv_sec - pa.tv_sec) * 1000 + (pb.tv_nsec - pa.tv_nsec) / 1000000;
-        prl_record("prep.compute", (pb.tv_sec-pa.tv_sec)*1e3+(pb.tv_nsec-pa.tv_nsec)/1e6, 0);
-        prl_elapsed("prep.total", timing_total);
         return 0;
     }
     const char *ds = getenv("PRL_PREP_DELAY_MS");
@@ -199,10 +182,7 @@ static void *prep_worker(void *p) {
         struct timespec delay = {delay_ms / 1000, (delay_ms % 1000) * 1000000};
         while (nanosleep(&delay, &delay) && errno == EINTR) {}
     }
-    prl_elapsed("prep.requested_delay", delay_start);
-    double key_start = prl_now_ms();
     bundle_key(b);
-    prl_elapsed("prep.key_snapshot", key_start);
     struct timespec pa, pb;
     clock_gettime(CLOCK_MONOTONIC, &pa);
     uint64_t seed = ((uint64_t)rand() << 32) ^ (uint64_t)time(0);
@@ -218,18 +198,12 @@ static void *prep_worker(void *p) {
     }
     clock_gettime(CLOCK_MONOTONIC, &pb);
     g_last_prep_ms = (pb.tv_sec - pa.tv_sec) * 1000 + (pb.tv_nsec - pa.tv_nsec) / 1000000;
-    prl_record("prep.compute", (pb.tv_sec-pa.tv_sec)*1e3+(pb.tv_nsec-pa.tv_nsec)/1e6, 0);
-    double upload_start = prl_now_ms();
     if (pearl_set_bt_slot)     pearl_set_bt_slot(b->Btn, b->slot);
     else if (pearl_set_b_slot) pearl_set_b_slot(b->Btn, (int)mp.n, b->slot);
-    prl_elapsed("prep.B_upload_host", upload_start);
-    prl_elapsed("prep.total", timing_total);
     return 0;
 }
 
 static void start_prep(pthread_t *thread, bundle_t *b) {
-    static long generation = 0;
-    b->timing_next_round = generation++;
     if (pthread_create(thread, 0, prep_worker, b)) {
         fputs("[!] cannot start prep worker\n", stderr); exit(2);
     }
@@ -287,17 +261,14 @@ static void process_proof(bundle_t *cur, uint8_t *bin, uint8_t *payload_buf) {
                                  cur->key, rows_abs, mp.nrows, cols_abs, mp.ncols,
                                  bin, 64 << 20);
     double proof_end = monotonic_ms();
-    prl_record("proof.build", proof_end-proof_start, bl > 0 ? (long)bl : 0);
     if (bl > 0) {
         pool_conn_t *sc = &user_conn;
         const char *sub_addr = submit_addr;
         pool_conn_t prefix_conn = {0};
         // Use the same negotiated format for encoding and the submit prefix.
         prefix_conn.gzip = sc->gzip;
-        double encode_start = prl_now_ms();
         ssize_t encoded_len = encode_proof_b64(bin, (size_t)bl, prefix_conn.gzip,
                                                payload_buf, 64 << 20);
-        prl_record("proof.encode", prl_now_ms()-encode_start, encoded_len > 0 ? (long)encoded_len : 0);
         if (encoded_len <= 0) {
             printf("[!] proof encoding failed (%zd), dropping share\n", encoded_len);
             return;
@@ -329,9 +300,7 @@ static void process_proof(bundle_t *cur, uint8_t *bin, uint8_t *payload_buf) {
                     memcpy(msg + hl, payload, plen);
                     memcpy(msg + hl + plen, tail, tail_len + 1);
                     // The proof length is already known; avoid scanning it with strlen.
-                    double send_start = prl_now_ms();
                     int sent = pool_send_line_checked(sc, msg, (size_t)hl + plen + tail_len);
-                    prl_record("proof.socket_send", prl_now_ms()-send_start, sent);
                     if (getenv("PRL_RAW")) fprintf(stderr, "[raw>] %s\n", msg);
                     if (getenv("PRL_LOOP_PROF")) fprintf(stderr,
                         "[proofprof] proof=%.1fms gzip=%.1fms send=%.1fms\n",
@@ -359,17 +328,12 @@ static void *proof_worker(void *unused) {
         proof_head = (proof_head + 1) % 2; --proof_count; proof_active = 1;
         pthread_cond_broadcast(&proof_cv);
         pthread_mutex_unlock(&proof_mu);
-        prl_context(b->timing_round, b->hit_strip, b->slot);
-        prl_elapsed("proof.queue_wait", b->timing_enqueued);
-        double worker_start = prl_now_ms();
         struct timespec a, z; clock_gettime(CLOCK_MONOTONIC, &a);
         process_proof(b, bin, payload_buf);
         clock_gettime(CLOCK_MONOTONIC, &z);
         if (getenv("PRL_LOOP_PROF")) fprintf(stderr, "[proofprof] proof+gzip+send=%.1fms\n",
             (z.tv_sec-a.tv_sec)*1e3 + (z.tv_nsec-a.tv_nsec)/1e6);
         pthread_mutex_lock(&proof_mu);
-        prl_elapsed("proof.worker_total", worker_start);
-        prl_elapsed("proof.enqueue_to_release", b->timing_enqueued);
         b->proof_busy = 0; proof_active = 0;
         pthread_cond_broadcast(&proof_cv);
         pthread_mutex_unlock(&proof_mu);
@@ -379,7 +343,6 @@ static void *proof_worker(void *unused) {
 
 int main(int argc, char **argv) {
     if (argc < 7) { fprintf(stderr, "usage: %s dev worker host port addr pass\n", argv[0]); return 1; }
-    prl_timing_enabled();
     int dev = atoi(argv[1]);
     const char *worker = argv[2], *host = argv[3], *addr = argv[5], *pass = argv[6];
     int port = atoi(argv[4]);
@@ -453,7 +416,6 @@ int main(int argc, char **argv) {
     start_prep(&pt, &bun[0]);
     long iter = 0;
     time_t t_start = time(0);
-    double previous_round_start = -1;
     while (1) {
         if (user_conn.dead) {
             proof_drain(); // No proof may send through a replaced pool session.
@@ -463,26 +425,17 @@ int main(int argc, char **argv) {
         }
         // Two bundles let CPU preparation and B transfer overlap NPU scanning.
         bundle_t *cur = &bun[iter % 2], *nxt = &bun[(iter + 1) % 2];
-        prl_context(cur->timing_next_round, -1, cur->slot);
-        double round_start = prl_now_ms(), join_start = round_start;
-        if (previous_round_start >= 0) prl_record("round.start_interval", round_start-previous_round_start, 0);
-        previous_round_start = round_start;
         struct timespec lj0; clock_gettime(CLOCK_MONOTONIC, &lj0);
         pthread_join(pt, 0);
         struct timespec lj1; clock_gettime(CLOCK_MONOTONIC, &lj1);
-        prl_elapsed("round.prep_join_wait", join_start);
-        double pause_start = prl_now_ms();
         coexist_gate();
-        prl_elapsed("round.coexist_wait", pause_start);
         if (g_reuse_b) {
             // A fresh B side invalidates the A prepared against the previous commitment.
             int prep_n = getenv("PRL_PREP_THREADS") ? atoi(getenv("PRL_PREP_THREADS")) : 64;
             if (ensure_bside(N, Kc, (int)mp.rank, prep_n)) {
                 uint64_t s = ((uint64_t)rand() << 32) ^ (uint64_t)time(0) ^ 0xA5A5ULL;
-                double redo_start = prl_now_ms();
                 prep_check(prep_a_side(s, cur->A, bs.key, bs.commitB, mp.m, mp.k, (int)mp.rank,
                             cur->An, g_EAL, cur->roots[0], cur->roots[2], prep_n, bs.cert_version));
-                prl_elapsed("reuse_B.redo_A", redo_start);
                 snprintf(cur->job_id, JOBLEN, "%s", bs.job_id);
                 cur->diff = bs.diff; memcpy(cur->ptarget, bs.ptarget, 32); memcpy(cur->key, bs.key, 32);
                 cur->cert_version = bs.cert_version;
@@ -493,24 +446,17 @@ int main(int argc, char **argv) {
 
         time_t t0 = time(0);
         struct timespec sa; clock_gettime(CLOCK_MONOTONIC, &sa);
-        double select_start = prl_now_ms();
         if (pearl_use_b) pearl_use_b(g_reuse_b ? 0 : cur->slot);
         else pearl_set_b(cur->Btn, (int)N);
-        prl_elapsed("round.select_B_host", select_start);
-        double target_start = prl_now_ms();
         uint32_t tgt[8];
         long rounded_k = (Kc / mp.rank) * mp.rank;
         job_t jt; jt.difficulty = cur->diff; memcpy(jt.ptarget, cur->ptarget, 32);
         POOL.build_target(&jt, tile_h, rounded_k, tgt);
-        prl_elapsed("round.target_cpu", target_start);
-        double scan_start = prl_now_ms();
         struct timespec sbb; clock_gettime(CLOCK_MONOTONIC, &sbb);
         int hs = -1, ht = -1;
         int pow_n = getenv("PRL_POW_THREADS") ? atoi(getenv("PRL_POW_THREADS")) : 64;
         int rc = scan_full(cur->An, nstrips, cur->roots[2], tgt, nbands, n_hi, pow_n,
                            scratch, &hs, &ht);
-        prl_context(cur->timing_round, -1, cur->slot);
-        prl_elapsed("round.scan", scan_start);
         struct timespec sb; clock_gettime(CLOCK_MONOTONIC, &sb);
         g_last_scan_ms = (sb.tv_sec - sa.tv_sec) * 1000 + (sb.tv_nsec - sa.tv_nsec) / 1000000;
         if (getenv("PRL_LOOP_PROF"))
@@ -520,10 +466,6 @@ int main(int argc, char **argv) {
                     (sb.tv_sec-sbb.tv_sec)*1e3 + (sb.tv_nsec-sbb.tv_nsec)/1e6);
         iter++;
         if (rc) proof_enqueue(cur, hs, ht);
-        prl_elapsed("round.total", round_start);
-        const char *summary_env = getenv("PRL_TIMING_SUMMARY_EVERY");
-        long summary_every = summary_env ? atol(summary_env) : 10;
-        if (summary_every > 0 && iter % summary_every == 0) prl_summary();
         double el = difftime(time(0), t_start);
         printf("[*] iter %ld scan %.0fs%s | %.3f iter/s | shares %ld/%ld\n",
                iter, difftime(time(0), t0), rc ? " HIT" : "", iter / (el > 0 ? el : 1), shares_acc, shares_sub);

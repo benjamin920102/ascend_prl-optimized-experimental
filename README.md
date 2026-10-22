@@ -1,5 +1,3 @@
-> Timing test edition: see [TIMING_zh.md](TIMING_zh.md) for build, run, CSV fields and measurement limitations.
-
 # `ascend_prl` — the world's first Ascend NPU cryptocurrency miner
 
 [![No Maintenance Intended](http://unmaintained.tech/badge.svg)](http://unmaintained.tech/)
@@ -11,7 +9,7 @@ coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~10 TH/s/devic
 
 > **DISCLAMER:** for educational purpose only. Use only with hardware you are authorized to.
 
-Each kernel submission handles one strip. The host retains a two-slot asynchronous pipeline. Vector partial input uses a TQue with two allocated buffers and prefetches the next fold.
+Each kernel submission handles one strip. The host uses a configurable asynchronous strip queue (`PIPE_DEPTH`, default 4). Vector partial input uses a TQue with two allocated buffers and prefetches the next fold.
 
 ## Quickstart
 

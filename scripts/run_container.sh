@@ -23,9 +23,16 @@ mount_args=(
   -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
 )
 
+# Forward standalone profiling settings without shell word splitting.
+prof_args=()
+for prof_var in PRL_PROF PRL_PROF_STRIPS PRL_PROF_EVERY PRL_PROF_TRACE PRL_PROF_OUT; do
+  if [[ -v "$prof_var" ]]; then prof_args+=(-e "$prof_var=${!prof_var}"); fi
+done
+
 echo "running $NAME on NPUs: $vis  pool=$POOL:$PORT"
 docker run -d --name "$NAME" --network host --restart unless-stopped --privileged \
   "${dev_args[@]}" "${mount_args[@]}" \
+  "${prof_args[@]}" \
   -e WALLET="$WALLET" -e POOL="$POOL" -e PORT="$PORT" \
   -e ASCEND_RT_VISIBLE_DEVICES="$vis" \
   ${BIN:+-e BIN="$BIN"} ${WORKER:+-e WORKER="$WORKER"} \

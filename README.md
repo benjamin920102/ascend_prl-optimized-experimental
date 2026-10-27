@@ -4,12 +4,15 @@
 
 **English** | [中文](README_zh.md)
 
+Standalone source profiling: [Vector / Cube / UB / synchronization guide](docs/PROFILING_zh.md).
+The existing GitHub Actions build enables instrumentation by default. Launch as usual to emit fenced-region timing, CSV and bounded traces for the first four strips; no extra build or launch arguments are required.
+
 A from-scratch miner for the [Pearl](https://arxiv.org/abs/2504.09971) Proof-of-**Useful**-Work
 coin on Huawei **Ascend 910B** NPUs. Tested on a 910B4; it does **~10 TH/s/device end-to-end**.
 
 > **DISCLAMER:** for educational purpose only. Use only with hardware you are authorized to.
 
-Each kernel submission handles one strip. The host uses a configurable asynchronous strip queue (`PIPE_DEPTH`, default 4). Vector partial input uses a TQue with two allocated buffers and prefetches the next fold.
+Each kernel submission handles one strip. The host retains a two-slot asynchronous pipeline. Vector partial input uses a TQue with two allocated buffers and prefetches the next fold.
 
 ## Quickstart
 

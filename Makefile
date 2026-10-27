@@ -26,6 +26,8 @@ endif
 MDIM ?= 16384
 # Host strip slots (separate from kernel BUFS). Use 2 for an A/B baseline.
 PIPE_DEPTH ?= 4
+# Diagnostic build: existing GitHub Actions `make RANK=128` enables profiling.
+PROFILE ?= 1
 
 OUT  := build
 # Locate BLAKE3 C sources from the Cargo registry when building the standalone miner.
@@ -36,7 +38,7 @@ CC   := gcc
 CFLAGS := -std=gnu11 -O3 -fopenmp -march=armv8-a+crypto -DBLAKE3_USE_NEON=1 -DBLAKE3_USE_TBB -DK=$(K) -DRANK=$(RANK) -DMDIM=$(MDIM) -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -I$(BLK)
 RPATH  := -Wl,-rpath,'$$ORIGIN'
 
-.PHONY: all miner kernel proof guard clean
+.PHONY: all miner kernel proof guard clean profile-probe profile-tests
 all: kernel proof miner
 
 $(OUT):
@@ -59,9 +61,18 @@ guard: $(OUT)
 kernel: $(OUT)
 	cd kernel && rm -rf build && mkdir build && cd build && \
 	  cmake -DCMAKE_ASC_RUN_MODE=npu -DCMAKE_ASC_ARCHITECTURES=dav-2201 \
-	        -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=4 -DVEC2X=2 \
+	        -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -DPEARL_PROFILE=$(PROFILE) -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=4 -DVEC2X=2 \
 	        -DCMAKE_MODULE_PATH="$$ASC_MODULES" .. && make -j
 	cp kernel/build/libpearl_hlc2.so $(OUT)/
+
+# Deterministic, pool-free transcript/hit comparison. Requires the kernel library.
+profile-probe: $(OUT)
+	g++ -std=c++14 -O2 -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -DPEARL_PROBE_K=$(K) \
+	    -o $(OUT)/profile_probe tests/profile_probe.cpp -L$(OUT) -lpearl_hlc2 $(RPATH)
+
+# Host-only tests; no CANN, NPU, pool connection or Rust dependencies.
+profile-tests:
+	python3 -m unittest discover -s tests -p 'test_profile*.py' -v
 
 proof: $(OUT)
 	cd proof-ffi && unset MAKEFLAGS && cargo build --release

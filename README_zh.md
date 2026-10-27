@@ -7,7 +7,10 @@
 
 > **免责声明：** 仅供学习研究之用。请仅在你拥有授权的硬件上运行。
 
-每次算子提交固定處理一個 strip，主機端使用可設定深度的非同步 strip 佇列（`PIPE_DEPTH`，預設 4）。Vector partial 輸入使用 TQue 兩塊緩衝，預載下一個 fold。
+每次算子提交固定處理一個 strip，主機端保留兩槽非同步流水線。Vector partial 輸入使用 TQue 兩塊緩衝，預載下一個 fold。
+
+新增：[獨立 Vector / Cube / UB / 同步計時插樁](docs/PROFILING_zh.md)。
+直接使用現有 GitHub Actions 編譯並照原方式啟動，預設即對前 4 個 strip 輸出同步完成區段計時、CSV 與 trace，不需額外編譯或啟動參數。
 
 ## 快速开始
 

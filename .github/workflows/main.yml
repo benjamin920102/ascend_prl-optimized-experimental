@@ -18,7 +18,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc g++ make cmake git curl clang pkg-config wget
+          sudo apt-get install -y gcc g++ make cmake git curl clang pkg-config wget python3
 
       - name: Download Pearl Dependencies
         run: |
@@ -45,7 +45,10 @@ jobs:
           sudo cp -r /tmp/blake3_repo/c/. /root/.cargo/registry/src/github.com-1ecc6299db9ec823/blake3-1.5.0/c/
           rm -rf /tmp/blake3_repo
 
-      - name: Build Project
+      - name: Verify Standalone Profiling
+        run: make profile-tests
+
+      - name: Build Project (automatic profiling)
         run: |
           sudo su -c "
             source /home/runner/Ascend/cann/set_env.sh
@@ -54,6 +57,8 @@ jobs:
 
       - name: Package Build Output
         run: |
+          sudo install -m 755 scripts/profile_summary.py build/profile_summary.py
+          sudo install -m 644 docs/PROFILING_zh.md build/PROFILING_zh.md
           sudo tar -czvf build-aarch64.tar.gz -C build .
 
       - name: Create Pre-release

@@ -38,13 +38,7 @@ int scan_full(const int8_t *a_noised, int num_strips,
     for (int completed = 0; completed < num_strips; ++completed) {
         pearl_strip_wait_done();
 
-        // Wait saved a host-owned result snapshot. Refill the freed slot first,
-        // allowing NPU execution to overlap CPU reduction of the completed strip.
-        if (submitted < num_strips) {
-            pearl_strip_submit_fast(a_noised + (size_t)submitted * R * K);
-            ++submitted;
-        }
-
+        // Consume the completed slot BEFORE a refill can overwrite its pinned result.
         int h_strip, h_tile;
         if (pearl_get_hit_result(&h_strip, &h_tile)) {
             *hit_strip = h_strip;
@@ -53,6 +47,10 @@ int scan_full(const int8_t *a_noised, int num_strips,
             for (int pending = completed + 1; pending < submitted; ++pending)
                 pearl_strip_wait_done();
             return 1;
+        }
+        if (submitted < num_strips) {
+            pearl_strip_submit_fast(a_noised + (size_t)submitted * R * K);
+            ++submitted;
         }
     }
 

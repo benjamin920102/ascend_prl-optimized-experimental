@@ -7,7 +7,7 @@ struct PearlAicpuArgs {
     const uint32_t *trans, *key, *target;
     volatile int32_t *ready;
     uint32_t *hit;
-    int32_t nbands, nhi, strip, percent, flagStride;
+    int32_t nbands, nhi, strip, percent, flagStride, worker, workers;
 };
 // Derive permutation schedule from the canonical BLAKE3 permutation to avoid handwritten-table errors.
 static const uint8_t perm[16]={2,6,3,10,7,0,4,13,1,11,12,5,9,14,15,8};
@@ -43,9 +43,9 @@ static void keyed4(const uint32_t msg[16][4],const uint32_t key[8],uint32_t out[
 __global__ __aicpu__ uint32_t pearl_aicpu_blake3(void *arg) {
  const PearlAicpuArgs a=*static_cast<const PearlAicpuArgs*>(arg);
  a.hit[0]=0;a.hit[1]=0;
- if(a.percent<=0 || a.nbands<=0 || a.nhi<=0)return 0;
+ if(a.percent<=0 || a.nbands<=0 || a.nhi<=0 || a.workers<=0 || a.worker<0 || a.worker>=a.workers)return 0;
  const int total=a.nbands*a.nhi;
- for(int band=0;band<a.nbands;band++){
+ for(int band=a.worker;band<a.nbands;band+=a.workers){
   // Only bounded by correct vector publication. External watchdog should detect stalls.
   while(__atomic_load_n(&a.ready[band*a.flagStride],__ATOMIC_ACQUIRE)<a.strip+1){}
   for(int base=0;base<a.nhi;base+=4){

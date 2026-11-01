@@ -40,7 +40,7 @@ static void keyed4(const uint32_t msg[16][4],const uint32_t key[8],uint32_t out[
  }
  for(int i=0;i<8;i++)vst1q_u32(out[i],veorq_u32(v[i],v[i+8]));
 }
-extern "C" __global__ __aicpu__ uint32_t pearl_aicpu_blake3(void *arg) {
+__global__ __aicpu__ uint32_t pearl_aicpu_blake3(void *arg) {
  const PearlAicpuArgs a=*static_cast<const PearlAicpuArgs*>(arg);
  a.hit[0]=0;a.hit[1]=0;
  if(a.percent<=0 || a.nbands<=0 || a.nhi<=0)return 0;

@@ -1,0 +1,71 @@
+#include "aicpu_api.h"
+#include <arm_neon.h>
+#include <stdint.h>
+// EXPERIMENTAL: relies on coherent device GM between AI Core and AICPU.
+// AICPU reads 64-byte keyed BLAKE3 messages, not the unrelated unkeyed benchmark.
+struct PearlAicpuArgs {
+    const uint32_t *trans, *key, *target;
+    volatile int32_t *ready;
+    uint32_t *hit;
+    int32_t nbands, nhi, strip, percent, flagStride;
+};
+// Derive permutation schedule from the canonical BLAKE3 permutation to avoid handwritten-table errors.
+static const uint8_t perm[16]={2,6,3,10,7,0,4,13,1,11,12,5,9,14,15,8};
+template<int N> static inline uint32x4_t rot(uint32x4_t x){ return vorrq_u32(vshrq_n_u32(x,N),vshlq_n_u32(x,32-N)); }
+static inline void g(uint32x4_t* v,int a,int b,int c,int d,uint32x4_t x,uint32x4_t y){
+ v[a]=vaddq_u32(vaddq_u32(v[a],v[b]),x); v[d]=rot<16>(veorq_u32(v[d],v[a]));
+ v[c]=vaddq_u32(v[c],v[d]);v[b]=rot<12>(veorq_u32(v[b],v[c]));
+ v[a]=vaddq_u32(vaddq_u32(v[a],v[b]),y);v[d]=rot<8>(veorq_u32(v[d],v[a]));
+ v[c]=vaddq_u32(v[c],v[d]);v[b]=rot<7>(veorq_u32(v[b],v[c]));
+}
+static void keyed4(const uint32_t msg[16][4],const uint32_t key[8],uint32_t out[8][4]){
+ const uint32_t iv[4]={0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a};
+ uint32x4_t v[16], m[16];
+ for(int i=0;i<8;i++)v[i]=vdupq_n_u32(key[i]);
+ for(int i=0;i<4;i++)v[8+i]=vdupq_n_u32(iv[i]);
+ v[12]=vdupq_n_u32(0);v[13]=vdupq_n_u32(0);v[14]=vdupq_n_u32(64);v[15]=vdupq_n_u32(0x1bu);
+ for(int i=0;i<16;i++)m[i]=vld1q_u32(msg[i]);
+ uint8_t schedule[16];for(int i=0;i<16;i++)schedule[i]=i;
+ for(int r=0;r<7;r++){
+  g(v,0,4,8,12,m[schedule[0]],m[schedule[1]]);
+  g(v,1,5,9,13,m[schedule[2]],m[schedule[3]]);
+  g(v,2,6,10,14,m[schedule[4]],m[schedule[5]]);
+  g(v,3,7,11,15,m[schedule[6]],m[schedule[7]]);
+  g(v,0,5,10,15,m[schedule[8]],m[schedule[9]]);
+  g(v,1,6,11,12,m[schedule[10]],m[schedule[11]]);
+  g(v,2,7,8,13,m[schedule[12]],m[schedule[13]]);
+  g(v,3,4,9,14,m[schedule[14]],m[schedule[15]]);
+  uint8_t next[16];for(int i=0;i<16;i++)next[i]=schedule[perm[i]];
+  for(int i=0;i<16;i++)schedule[i]=next[i];
+ }
+ for(int i=0;i<8;i++)vst1q_u32(out[i],veorq_u32(v[i],v[i+8]));
+}
+extern "C" __global__ __aicpu__ uint32_t pearl_aicpu_blake3(void *arg) {
+ const PearlAicpuArgs a=*static_cast<const PearlAicpuArgs*>(arg);
+ a.hit[0]=0;a.hit[1]=0;
+ if(a.percent<=0 || a.nbands<=0 || a.nhi<=0)return 0;
+ const int total=a.nbands*a.nhi;
+ for(int band=0;band<a.nbands;band++){
+  // Only bounded by correct vector publication. External watchdog should detect stalls.
+  while(__atomic_load_n(&a.ready[band*a.flagStride],__ATOMIC_ACQUIRE)<a.strip+1){}
+  for(int base=0;base<a.nhi;base+=4){
+   alignas(16) uint32_t msg[16][4], digest[8][4];
+   bool active[4]={false,false,false,false};
+   for(int lane=0;lane<4;lane++){
+    int hi=base+lane;active[lane]=hi<a.nhi && (((band*a.nhi+hi)%100)<a.percent);
+    for(int w=0;w<16;w++)msg[w][lane]=active[lane]?a.trans[(uint64_t)band*16*64+w*64+hi]:0;
+   }
+   if(!active[0]&&!active[1]&&!active[2]&&!active[3])continue;
+   keyed4(msg,a.key,digest);
+   for(int lane=0;lane<4;lane++)if(active[lane]){
+    int match=1;for(int w=7;w>=0;w--){
+      if(digest[w][lane]>a.target[w]){match=0;break;}
+      if(digest[w][lane]<a.target[w])break;
+    }
+    if(match && !a.hit[1]){int hi=base+lane;
+       a.hit[0]=(uint32_t)(a.strip*total+hi*a.nbands+band);a.hit[1]=1;}
+   }
+  }
+ }
+ return 0;
+}

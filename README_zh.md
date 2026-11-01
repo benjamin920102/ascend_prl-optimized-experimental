@@ -9,9 +9,6 @@
 
 每次算子提交固定處理一個 strip，主機端保留兩槽非同步流水線。Vector partial 輸入使用 TQue 兩塊緩衝，預載下一個 fold。
 
-新增：[獨立 Vector / Cube / UB / 同步計時插樁](docs/PROFILING_zh.md)。
-直接使用現有 GitHub Actions 編譯並照原方式啟動，預設即對前 4 個 strip 輸出同步完成區段計時、CSV 與 trace，不需額外編譯或啟動參數。
-
 ## 快速开始
 
 1. **创建 Pearl 钱包。** 使用[官方钱包](https://github.com/pearl-research-labs/pearl/releases/tag/pearl-wallet-v2.0.0)

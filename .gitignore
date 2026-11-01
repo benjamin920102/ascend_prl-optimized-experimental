@@ -9,6 +9,3 @@ challenge_solver
 .DS_Store
 pearl
 releases/
-profile/
-__pycache__/
-*.pyc

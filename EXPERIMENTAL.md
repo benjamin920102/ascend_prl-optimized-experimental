@@ -44,3 +44,10 @@ The CMake definition invokes `bisheng` on `kernel/pearl_aicpu_blake3.aicpu` and 
 ## Build fix (2026-11-02)
 
 `pearl_hlc2_cube.asc`: explicitly cast `g_tD[s]` (byte-addressed device transcript buffer) to `const uint32_t*` when filling `PearlAicpuArgs`. This resolves the compiler diagnostic at the AICPU args initializer. Requires validation on a CANN/910C toolchain; not device-tested.
+
+## 2026-11-02: Miner undefined symbol repair (experimental v2)
+The previous build generated `pearl_aicpu_blake3.o` using a manual custom command and linked it as if it were a regular host object. The resulting `libpearl_hlc2.so` could contain an unresolved `pearl_aicpu_blake3(void*)` host launch reference. The CMake project now enables **AICPU** as a real language via `find_package(AICPU REQUIRED)` and includes `pearl_aicpu_blake3.aicpu` as a source in the shared heterogeneous library. The old custom object target/link command has been removed. This follows the Ascend C documentation's mixed `.asc`+`.aicpu` CMake build structure. A post-build `nm -D -C` diagnostic rejects the specific unresolved symbol when `nm` is present.
+
+Reconfigure from a clean build directory (`rm -rf kernel/build`) before rebuilding. Needs a CANN release with an AICPU CMake package. This patch has NOT been compiled on Ascend hardware. Run a keyed-BLAKE3 correctness test and verify AICPU concurrency before relying on any mining result.
+
+Documentation: https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/920beta2/programug/Ascendcopdevg/asc-devkit/docs/zh/guide/programming_guide/compilation_and_execution/operator_compilation/bisheng_compiler.md

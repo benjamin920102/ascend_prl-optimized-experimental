@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 set(CMAKE_ASC_ARCHITECTURES "dav-2201" CACHE STRING "NPU architecture")
 find_package(ASC REQUIRED)
-project(pearl_hlc2 LANGUAGES ASC CXX)
+find_package(AICPU REQUIRED)
+project(pearl_hlc2 LANGUAGES ASC AICPU CXX)
 # Tuned config: NINNER=1 NFOLD=32 BUFS=4 VEC2X=2
 set(NINNER "1"  CACHE STRING "inner matmuls per fold-step")
 set(NFOLD  "32" CACHE STRING "fold-steps")
@@ -9,7 +10,7 @@ set(PEARL_PIPE_DEPTH "4" CACHE STRING "host strip queue depth")
 set(BUFS "4" CACHE STRING "slot ping-pong depth")
 set(BACKOFF "500" CACHE STRING "spin backoff iters")
 set(VEC2X "2" CACHE STRING "vec consumers per cube producer")
-add_library(pearl_hlc2 SHARED pearl_hlc2_cube.asc pearl_hlc2_vec.asc)
+add_library(pearl_hlc2 SHARED pearl_hlc2_cube.asc pearl_hlc2_vec.asc pearl_aicpu_blake3.aicpu)
 set_target_properties(pearl_hlc2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(pearl_hlc2 PRIVATE tiling_api register platform m dl pthread)
 target_compile_options(pearl_hlc2 PRIVATE
@@ -22,21 +23,16 @@ target_compile_options(pearl_hlc2 PRIVATE
     $<$<COMPILE_LANGUAGE:ASC>:-DVEC2X=${VEC2X}>
 )
 
-# Experimental AICPU NEON kernel object, built with bisheng before ASC target link.
-# AICPU linker compatibility is toolchain dependent; see EXPERIMENTAL.md.
-set(AICPU_INC "$ENV{ASCEND_HOME_PATH}/asc/include/aicpu_api")
-if(NOT EXISTS "${AICPU_INC}/aicpu_api.h")
-  set(AICPU_INC "$ENV{ASCEND_HOME_PATH}/include/ascendc/aicpu_api")
+# Compile the AICPU kernel as a first-class language source in the SAME
+# heterogeneous target. A separately generated .o linked as an ordinary host
+# object can leave the host launch stub unresolved (pearl_aicpu_blake3(void*)).
+# The AICPU CMake toolchain supplies the correct device packaging and host stub.
+# Check undefined symbols immediately after linking the shared library.
+find_program(PRL_NM_TOOL NAMES nm llvm-nm)
+if(PRL_NM_TOOL)
+  add_custom_command(TARGET pearl_hlc2 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -DNM=${PRL_NM_TOOL}
+      -DLIB=$<TARGET_FILE:pearl_hlc2>
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/check_aicpu_symbols.cmake
+    VERBATIM)
 endif()
-set(AICPU_LIB "$ENV{ASCEND_HOME_PATH}/lib64/device/lib64")
-if(NOT EXISTS "${AICPU_LIB}")
-  set(AICPU_LIB "$ENV{ASCEND_HOME_PATH}/toolkit/lib64/device/lib64")
-endif()
-add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/pearl_aicpu_blake3.o
-  COMMAND bisheng -O3 ${CMAKE_CURRENT_SOURCE_DIR}/pearl_aicpu_blake3.aicpu
-  -I${AICPU_INC} --cce-aicpu-L${AICPU_LIB} --cce-aicpu-laicpu_api
-  -c -o ${CMAKE_CURRENT_BINARY_DIR}/pearl_aicpu_blake3.o
-  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pearl_aicpu_blake3.aicpu VERBATIM)
-add_custom_target(pearl_aicpu_obj DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/pearl_aicpu_blake3.o)
-add_dependencies(pearl_hlc2 pearl_aicpu_obj)
-target_link_libraries(pearl_hlc2 PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/pearl_aicpu_blake3.o)

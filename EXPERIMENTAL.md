@@ -40,3 +40,7 @@ The CMake definition invokes `bisheng` on `kernel/pearl_aicpu_blake3.aicpu` and 
 * Diagnostic transcript export remains valid. The production path now exports transcripts when offloading is enabled, increasing GM write traffic.
 * No Ascend toolchain or 910C was available in the preparation environment. Source packaging and static checks are possible here, but hardware correctness is not established.
 * Keep the original ZIP as rollback and compare original Vector-only outputs before experimenting.
+
+## Build fix (2026-11-02)
+
+`pearl_hlc2_cube.asc`: explicitly cast `g_tD[s]` (byte-addressed device transcript buffer) to `const uint32_t*` when filling `PearlAicpuArgs`. This resolves the compiler diagnostic at the AICPU args initializer. Requires validation on a CANN/910C toolchain; not device-tested.

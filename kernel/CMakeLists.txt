@@ -11,7 +11,8 @@ set(BUFS "4" CACHE STRING "slot ping-pong depth")
 set(BACKOFF "500" CACHE STRING "spin backoff iters")
 set(VEC2X "2" CACHE STRING "vec consumers per cube producer")
 add_library(pearl_hlc2 SHARED pearl_hlc2_cube.asc pearl_hlc2_vec.asc pearl_aicpu_blake3.aicpu)
-set_target_properties(pearl_hlc2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# ASC owns the host-facing shared library link; AICPU remains a compiled source.
+set_target_properties(pearl_hlc2 PROPERTIES POSITION_INDEPENDENT_CODE ON LINKER_LANGUAGE ASC)
 target_link_libraries(pearl_hlc2 PRIVATE tiling_api register platform m dl pthread)
 target_compile_options(pearl_hlc2 PRIVATE
     $<$<COMPILE_LANGUAGE:ASC>:--npu-arch=${CMAKE_ASC_ARCHITECTURES}>

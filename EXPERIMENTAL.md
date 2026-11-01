@@ -51,3 +51,9 @@ The previous build generated `pearl_aicpu_blake3.o` using a manual custom comman
 Reconfigure from a clean build directory (`rm -rf kernel/build`) before rebuilding. Needs a CANN release with an AICPU CMake package. This patch has NOT been compiled on Ascend hardware. Run a keyed-BLAKE3 correctness test and verify AICPU concurrency before relying on any mining result.
 
 Documentation: https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/920beta2/programug/Ascendcopdevg/asc-devkit/docs/zh/guide/programming_guide/compilation_and_execution/operator_compilation/bisheng_compiler.md
+
+## CMake ASC/AICPU link fix
+
+- Force `LINKER_LANGUAGE ASC` on `pearl_hlc2` to resolve equal linker preference for ASC and AICPU (CMake configure).
+- Use `extern "C"` on the ASC-side AICPU kernel declaration to match the kernel definition.
+- Rebuild from a clean `kernel/build`; hardware CANN compile/runtime has not been verified in this environment.

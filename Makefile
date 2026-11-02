@@ -26,10 +26,6 @@ endif
 MDIM ?= 16384
 # Host strip slots (separate from kernel BUFS). Use 2 for an A/B baseline.
 PIPE_DEPTH ?= 4
-BUFS ?= 4
-VEC2X ?= 2
-BACKOFF ?= 500
-BASEN ?= 0
 
 OUT  := build
 # Locate BLAKE3 C sources from the Cargo registry when building the standalone miner.
@@ -47,7 +43,7 @@ $(OUT):
 	mkdir -p $(OUT)
 
 # Link exactly one frontend per binary; build-time rank/shape is encoded in the proof.
-ENGINE_SRC := src/miner.c src/proofgz.c src/pools/stratum.c src/prep.c src/scan_strip_async.c src/blake3_join.c $(BLK_SRC)
+ENGINE_SRC := src/miner.c src/proofgz.c src/pools/stratum.c src/prep.c src/scan_strip_async.c src/blake3_join.c src/cpu_budget.c $(BLK_SRC)
 # Use libz's soname: some runtime images lack the libz.so development symlink.
 LINK := -L$(OUT) -lpearl_hlc2 -lpearl_proof -lpthread -l:libz.so.1 $(RPATH)
 miner: $(OUT)
@@ -63,8 +59,7 @@ guard: $(OUT)
 kernel: $(OUT)
 	cd kernel && rm -rf build && mkdir build && cd build && \
 	  cmake -DCMAKE_ASC_RUN_MODE=npu -DCMAKE_ASC_ARCHITECTURES=dav-2201 \
-	        -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=$(BUFS) -DVEC2X=$(VEC2X) \
-	        -DBACKOFF=$(BACKOFF) -DBASEN=$(BASEN) \
+	        -DPEARL_PIPE_DEPTH=$(PIPE_DEPTH) -DNINNER=$(NINNER) -DNFOLD=$(NFOLD) -DBUFS=4 -DVEC2X=2 \
 	        -DCMAKE_MODULE_PATH="$$ASC_MODULES" .. && make -j
 	cp kernel/build/libpearl_hlc2.so $(OUT)/
 

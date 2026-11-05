@@ -173,3 +173,23 @@ Legacy random fill still uses thread-partitioned RNG: changing the actual team s
 change its matrix for the same seed, as before. The rank-128 NEON table is now guarded by
 rank; larger ranks use full scalar indices. This update was statically reviewed only,
 without compilation, tests, or benchmarks, as requested.
+
+## BLAKE3 64-way memory-based Vector integration
+
+The production Vector consumer now hashes 64 independent 64-byte keyed BLAKE3
+transcripts in parallel when `n_hi == 64`. It uses the existing 16-by-64
+transcript SoA layout, seven compression rounds, all eight output words, and
+the original 256-bit target comparator. The implementation uses DAV_2201
+memory-based vector operations (including OR/AND/SUB for XOR) and reuses 7,424
+bytes of the existing 16 KiB `foldB` UB buffer after folding. No extra kernel
+launch or new UB buffer is introduced.
+
+Vector64 is the production hashing path for 64 lanes, without any diagnostic
+mode or runtime/compile-time Vector64 toggle. Other `n_hi` values retain the
+original scalar fallback for correctness. This patch intentionally does
+**not** modify GRID, VEC2X, pipeline scheduling, or hardware detection.
+
+The separate 910B4 benchmark reported 2.3774x hash-kernel speedup for 1,024
+batches in first-word-output timing mode; all eight words were checked for
+correctness separately. This is **not** a production end-to-end TH/s result.
+The integrated patch has not been compiled or run on 910B4/910C.

@@ -174,22 +174,25 @@ change its matrix for the same seed, as before. The rank-128 NEON table is now g
 rank; larger ranks use full scalar indices. This update was statically reviewed only,
 without compilation, tests, or benchmarks, as requested.
 
-## BLAKE3 64-way memory-based Vector integration
+## BLAKE3 Vector64-only production hashing
 
-The production Vector consumer now hashes 64 independent 64-byte keyed BLAKE3
-transcripts in parallel when `n_hi == 64`. It uses the existing 16-by-64
-transcript SoA layout, seven compression rounds, all eight output words, and
-the original 256-bit target comparator. The implementation uses DAV_2201
-memory-based vector operations (including OR/AND/SUB for XOR) and reuses 7,424
-bytes of the existing 16 KiB `foldB` UB buffer after folding. No extra kernel
-launch or new UB buffer is introduced.
+The production Vector consumer **always** performs keyed BLAKE3 compression
+using 64-way memory-based SIMD on the existing `16 x 64` transcript SoA buffer.
+All seven rounds and eight 32-bit output words are computed with Vector APIs.
+There is **no scalar BLAKE3 implementation, scalar hash fallback, diagnostic
+switch, or Vector64 compile-time option** in the production Vector kernel.
+The host rejects `n_hi != 64` rather than silently switching to scalar.
+The supported pool configurations set `nrows=2`, giving `n_hi=128/2=64`.
 
-Vector64 is the production hashing path for 64 lanes, without any diagnostic
-mode or runtime/compile-time Vector64 toggle. Other `n_hi` values retain the
-original scalar fallback for correctness. This patch intentionally does
-**not** modify GRID, VEC2X, pipeline scheduling, or hardware detection.
+The existing 256-bit target comparator still reads the eight Vector-produced
+hash words per lane in order to preserve first-hit and proof semantics. These
+scalar target comparisons are **not** scalar BLAKE3 compression.
 
-The separate 910B4 benchmark reported 2.3774x hash-kernel speedup for 1,024
-batches in first-word-output timing mode; all eight words were checked for
-correctness separately. This is **not** a production end-to-end TH/s result.
-The integrated patch has not been compiled or run on 910B4/910C.
+The Vector64 implementation reuses 7,424 bytes of the existing 16 KiB `foldB`
+UB buffer after Fold. GRID=20, VEC2X=2, BUFS=4 and Cube/Fold/Proof remain
+unchanged. No extra Vector kernel launch or UB buffer is introduced.
+
+The standalone 910B4 benchmark reported 2.3774x at 1,024 batches with
+first-word-only timed output; full eight-word correctness was checked separately.
+This is not a measured production TH/s improvement. The integrated production
+code has not been compiled or tested on CANN / 910B4 / 910C.
